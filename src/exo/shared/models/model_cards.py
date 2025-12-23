@@ -53,17 +53,17 @@ MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=61,
         ),
     ),
-    "deepseek-v3.1-8bit": ModelCard(
-        short_id="deepseek-v3.1-8bit",
-        model_id=ModelId("mlx-community/DeepSeek-V3.1-8bit"),
-        name="DeepSeek V3.1 (8-bit)",
+    "deepseek-coder-v2-lite-8bit": ModelCard(
+        short_id="deepseek-coder-v2-lite-8bit",
+        model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-8bit"),
+        name="DeepSeek Coder V2 Lite (8-bit)",
         description="""DeepSeek V3.1 is a large language model trained on the DeepSeek V3.1 dataset.""",
         tags=[],
         metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/DeepSeek-V3.1-8bit"),
-            pretty_name="DeepSeek V3.1 (8-bit)",
-            storage_size=Memory.from_gb(713),
-            n_layers=61,
+            model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-8bit"),
+            pretty_name="DeepSeek Coder V2 Lite (8-bit)",
+            storage_size=Memory.from_gb(15000),
+            n_layers=27,
         ),
     ),
     # "deepseek-v3.2": ModelCard(
@@ -271,6 +271,20 @@ MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=32,
         ),
     ),
+    # qwen2.5
+    "qwen-2.5-coder-32b": ModelCard(
+        short_id="qwen-2.5-coder-32b",
+        model_id=ModelId("mlx-community/Qwen2.5-Coder-32B-4bit"),
+        name="Qwen 2.5 Coder 32B (4-bit)",
+        description="""Qwen 2.5 Coder 32B is a large language model trained on the Phi 3 Mini dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/Qwen2.5-Coder-32B-4bit"),
+            pretty_name="Qwen 2.5 Coder 32B (4-bit)",
+            storage_size=Memory.from_gb(18),
+            n_layers=64,
+        ),
+    ),
     # qwen3
     "qwen3-0.6b": ModelCard(
         short_id="qwen3-0.6b",
@@ -298,6 +312,19 @@ MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=28,
         ),
     ),
+    "qwen3-14b-4bit": ModelCard(
+        short_id="qwen3-14b-4bit",
+        model_id=ModelId("mlx-community/Qwen3-14B-4bit-DWQ-053125"),
+        name="Qwen3 14B (4-bit)",
+        description="""Qwen3 14B is a large language model trained on the Qwen3 8B dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/Qwen3-14B-4bit-DWQ-053125"),
+            pretty_name="Qwen3 14B (4-bit)",
+            storage_size=Memory.from_mb(15000),
+            n_layers=40,
+        ),   
+    ),
     "qwen3-30b": ModelCard(
         short_id="qwen3-30b",
         model_id=ModelId("mlx-community/Qwen3-30B-A3B-4bit"),
@@ -307,6 +334,45 @@ MODEL_CARDS: dict[str, ModelCard] = {
         metadata=ModelMetadata(
             model_id=ModelId("mlx-community/Qwen3-30B-A3B-4bit"),
             pretty_name="Qwen3 30B A3B (4-bit)",
+            storage_size=Memory.from_mb(16797),
+            n_layers=48,
+        ),
+    ),
+    "qwen3-25b-coder": ModelCard(
+        short_id="qwen3-25b-coder",
+        model_id=ModelId("AIMLNewbie/Qwen3-Coder-REAP-25B-A3B-mlx-4Bit"),
+        name="Qwen3 Coder 25B A3B (4-bit)",
+        description="""Qwen3 Coder 25B is a large language model trained on the Qwen3 Coder 25B dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("AIMLNewbie/Qwen3-Coder-REAP-25B-A3B-mlx-4Bit"),
+            pretty_name="Qwen3 Coder 25B A3B (4-bit)",
+            storage_size=Memory.from_mb(16797),
+            n_layers=48,
+        ),
+    ),
+    "qwen3-30b-coder": ModelCard(
+        short_id="qwen3-30b-coder",
+        model_id=ModelId("nightmedia/unsloth-Qwen3-Coder-30B-A3B-Instruct-qx4-mlx"),
+        name="Qwen3 Coder 30B A3B (4-bit)",
+        description="""Qwen3 Coder 30B is a large language model trained on the Qwen3 Coder 30B dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("nightmedia/unsloth-Qwen3-Coder-30B-A3B-Instruct-qx4-mlx"),
+            pretty_name="Qwen3 Coder 30B A3B (4-bit)",
+            storage_size=Memory.from_mb(16797),
+            n_layers=48,
+        ),
+    ),
+    "qwen3-30b-coder-3bit": ModelCard(
+        short_id="qwen3-30b-coder-3bit",
+        model_id=ModelId("mlx-community/Qwen3-Coder-30B-A3B-Instruct-3bit"),
+        name="Qwen3 Coder 30B A3B (3-bit)",
+        description="""Qwen3 Coder 30B is a large language model trained on the Qwen3 Coder 30B dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/Qwen3-Coder-30B-A3B-Instruct-3bit"),
+            pretty_name="Qwen3 Coder 30B A3B (3-bit)",
             storage_size=Memory.from_mb(16797),
             n_layers=48,
         ),
