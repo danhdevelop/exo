@@ -46,6 +46,7 @@ export interface NodeInfo {
 	};
 	last_macmon_update: number;
 	friendly_name?: string;
+	engine?: string;
 }
 
 export interface TopologyEdge {
@@ -92,6 +93,7 @@ interface RawNodeProfile {
 		temp?: number;
 		sysPower?: number;
 	};
+	engine?: string;
 }
 
 interface RawTopologyNode {
@@ -256,7 +258,8 @@ function transformTopology(raw: RawTopology, profiles?: RawNodeProfiles): Topolo
 				sys_power: profile?.system?.sysPower
 			},
 			last_macmon_update: Date.now() / 1000,
-			friendly_name: profile?.friendlyName
+			friendly_name: profile?.friendlyName,
+			engine: profile?.engine ?? 'mlx'
 		};
 	}
 

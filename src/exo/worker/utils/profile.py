@@ -74,9 +74,6 @@ async def start_polling_node_metrics(
     while True:
         try:
             metrics = await get_metrics_async()
-            if metrics is None:
-                return
-
             network_interfaces = get_network_interfaces()
             # these awaits could be joined but realistically they should be cached
             model_id, chip_id = await get_model_and_chip()
@@ -85,23 +82,42 @@ async def start_polling_node_metrics(
             # do the memory profile last to get a fresh reading to not conflict with the other memory profiling loop
             memory_profile = get_memory_profile()
 
-            await callback(
-                NodePerformanceProfile(
-                    model_id=model_id,
-                    chip_id=chip_id,
-                    friendly_name=friendly_name,
-                    network_interfaces=network_interfaces,
-                    memory=memory_profile,
-                    system=SystemPerformanceProfile(
-                        gpu_usage=metrics.gpu_usage[1],
-                        temp=metrics.temp.gpu_temp_avg,
-                        sys_power=metrics.sys_power,
-                        pcpu_usage=metrics.pcpu_usage[1],
-                        ecpu_usage=metrics.ecpu_usage[1],
-                        ane_power=metrics.ane_power,
-                    ),
+            # Get engine from environment variable
+            engine = os.getenv("INFERENCE_ENGINE", "mlx").lower()
+
+            if metrics is None:
+                # Non-macOS system - create profile with minimal system metrics
+                await callback(
+                    NodePerformanceProfile(
+                        model_id=model_id,
+                        chip_id=chip_id,
+                        friendly_name=friendly_name,
+                        network_interfaces=network_interfaces,
+                        memory=memory_profile,
+                        system=SystemPerformanceProfile(),
+                        engine=engine,
+                    )
                 )
-            )
+            else:
+                # macOS system - create profile with full metrics
+                await callback(
+                    NodePerformanceProfile(
+                        model_id=model_id,
+                        chip_id=chip_id,
+                        friendly_name=friendly_name,
+                        network_interfaces=network_interfaces,
+                        memory=memory_profile,
+                        system=SystemPerformanceProfile(
+                            gpu_usage=metrics.gpu_usage[1],
+                            temp=metrics.temp.gpu_temp_avg,
+                            sys_power=metrics.sys_power,
+                            pcpu_usage=metrics.pcpu_usage[1],
+                            ecpu_usage=metrics.ecpu_usage[1],
+                            ane_power=metrics.ane_power,
+                        ),
+                        engine=engine,
+                    )
+                )
 
         except asyncio.TimeoutError:
             logger.warning(

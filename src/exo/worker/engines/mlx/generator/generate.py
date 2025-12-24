@@ -12,7 +12,13 @@ from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
 from exo.worker.engines.mlx import Model
-from exo.worker.engines.mlx.constants import KV_BITS, KV_GROUP_SIZE, MAX_TOKENS
+from exo.worker.engines.mlx.constants import (
+    KV_BITS,
+    KV_GROUP_SIZE,
+    MAX_KV_SIZE,
+    KEEP_KV_SIZE,
+    MAX_TOKENS,
+)
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
     make_kv_cache,
@@ -60,8 +66,11 @@ def warmup_inference(
 
     tokens_generated = 0
 
+    # Use rotating KV cache for warmup to match generation settings
     cache = make_kv_cache(
         model=model,
+        max_kv_size=MAX_KV_SIZE,
+        keep=KEEP_KV_SIZE or 0,
     )
 
     logger.info("Generating warmup tokens")
@@ -72,7 +81,7 @@ def warmup_inference(
         max_tokens=50,
         sampler=sampler,
         prompt_cache=cache,
-        prefill_step_size=65536,
+        prefill_step_size=2048,
         kv_group_size=KV_GROUP_SIZE,
         kv_bits=KV_BITS,
     ):
@@ -99,9 +108,16 @@ def mlx_generate(
         chat_task_data=task,
     )
 
-    caches = make_kv_cache(model=model)
+    # Use rotating KV cache with size limits to prevent GPU timeout on large contexts
+    # This is especially important for distributed inference on M-series chips
+    caches = make_kv_cache(
+        model=model,
+        max_kv_size=MAX_KV_SIZE,
+        keep=KEEP_KV_SIZE or 0,
+    )
 
     max_tokens = task.max_tokens or MAX_TOKENS
+
     for out in stream_generate(
         model=model,
         tokenizer=tokenizer,
@@ -109,7 +125,7 @@ def mlx_generate(
         max_tokens=max_tokens,
         sampler=sampler,
         prompt_cache=caches,
-        prefill_step_size=65536,
+        prefill_step_size=2048,
         kv_group_size=KV_GROUP_SIZE,
         kv_bits=KV_BITS,
     ):

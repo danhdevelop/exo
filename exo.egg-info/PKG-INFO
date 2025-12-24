@@ -1,0 +1,44 @@
+Metadata-Version: 2.4
+Name: exo
+Version: 0.0.1
+License-File: LICENSE
+Requires-Dist: aiohttp==3.10.11
+Requires-Dist: aiohttp_cors==0.7.0
+Requires-Dist: aiofiles==24.1.0
+Requires-Dist: grpcio==1.70.0
+Requires-Dist: grpcio-tools==1.70.0
+Requires-Dist: Jinja2==3.1.4
+Requires-Dist: numpy==2.0.0
+Requires-Dist: nuitka==2.5.1
+Requires-Dist: nvidia-ml-py==12.560.30
+Requires-Dist: opencv-python==4.10.0.84
+Requires-Dist: pillow==10.4.0
+Requires-Dist: prometheus-client==0.20.0
+Requires-Dist: protobuf==5.28.1
+Requires-Dist: psutil==6.0.0
+Requires-Dist: pyamdgpuinfo==2.1.6; platform_system == "Linux"
+Requires-Dist: pydantic==2.9.2
+Requires-Dist: requests==2.32.3
+Requires-Dist: rich==13.7.1
+Requires-Dist: scapy==2.6.1
+Requires-Dist: tqdm==4.66.4
+Requires-Dist: transformers==4.46.3
+Requires-Dist: uuid==1.30
+Requires-Dist: uvloop==0.21.0
+Requires-Dist: tinygrad@ git+https://github.com/tinygrad/tinygrad.git@ec120ce6b9ce8e4ff4b5692566a683ef240e8bc8
+Requires-Dist: mlx>=0.22.0
+Requires-Dist: mlx-lm==0.21.1
+Provides-Extra: formatting
+Requires-Dist: yapf==0.40.2; extra == "formatting"
+Provides-Extra: apple-silicon
+Requires-Dist: mlx>=0.22.0; extra == "apple-silicon"
+Requires-Dist: mlx-lm==0.21.1; extra == "apple-silicon"
+Provides-Extra: windows
+Requires-Dist: pywin32==308; extra == "windows"
+Provides-Extra: nvidia-gpu
+Requires-Dist: nvidia-ml-py==12.560.30; extra == "nvidia-gpu"
+Provides-Extra: amd-gpu
+Requires-Dist: pyrsmi==0.2.0; extra == "amd-gpu"
+Dynamic: license-file
+Dynamic: provides-extra
+Dynamic: requires-dist

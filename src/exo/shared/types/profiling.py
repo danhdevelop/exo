@@ -59,6 +59,7 @@ class NodePerformanceProfile(CamelCaseModel):
     memory: MemoryPerformanceProfile
     network_interfaces: list[NetworkInterfaceInfo] = []
     system: SystemPerformanceProfile
+    engine: str = "mlx"
 
 
 class ConnectionProfile(CamelCaseModel):

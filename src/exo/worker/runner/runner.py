@@ -1,4 +1,5 @@
 import time
+import os
 
 from exo.shared.types.api import ChatCompletionMessageText
 from exo.shared.types.chunks import TokenChunk
@@ -33,12 +34,29 @@ from exo.shared.types.worker.runners import (
     RunnerWarmingUp,
 )
 from exo.utils.channels import ClosedResourceError, MpReceiver, MpSender
-from exo.worker.engines.mlx.generator.generate import mlx_generate, warmup_inference
-from exo.worker.engines.mlx.utils_mlx import (
-    initialize_mlx,
-    mlx_force_oom,
-)
 from exo.worker.runner.bootstrap import logger
+
+# Engine selection
+INFERENCE_ENGINE = os.getenv("INFERENCE_ENGINE", "mlx").lower()
+
+if INFERENCE_ENGINE == "tinygrad":
+    from exo.worker.engines.tinygrad.generator.generate import tinygrad_generate as engine_generate, warmup_inference
+    from exo.worker.engines.tinygrad.utils_tinygrad import initialize_tinygrad as initialize_engine
+    logger.info("Using tinygrad inference engine")
+    engine_force_oom = None  # Tinygrad doesn't have force OOM function
+else:
+    try:
+        from exo.worker.engines.mlx.generator.generate import mlx_generate as engine_generate, warmup_inference
+        from exo.worker.engines.mlx.utils_mlx import initialize_mlx as initialize_engine, mlx_force_oom
+        logger.info("Using MLX inference engine")
+        engine_force_oom = mlx_force_oom
+    except ImportError as e:
+        logger.error(f"MLX is not available on this platform: {e}")
+        logger.info("Falling back to tinygrad inference engine")
+        INFERENCE_ENGINE = "tinygrad"
+        from exo.worker.engines.tinygrad.generator.generate import tinygrad_generate as engine_generate, warmup_inference
+        from exo.worker.engines.tinygrad.utils_tinygrad import initialize_tinygrad as initialize_engine
+        engine_force_oom = None
 
 
 def main(
@@ -89,7 +107,7 @@ def main(
                             )
                         )
 
-                        model, tokenizer, sampler = initialize_mlx(bound_instance)
+                        model, tokenizer, sampler = initialize_engine(bound_instance)
 
                         current_status = RunnerLoaded()
                         logger.info("runner loaded")
@@ -145,8 +163,8 @@ def main(
                         assert task_params.messages[0].content is not None
                         _check_for_debug_prompts(task_params.messages[0].content)
 
-                        # Generate responses using the actual MLX generation
-                        for response in mlx_generate(
+                        # Generate responses using the inference engine
+                        for response in engine_generate(
                             model=model,
                             tokenizer=tokenizer,
                             sampler=sampler,
@@ -236,6 +254,9 @@ def _check_for_debug_prompts(
         logger.info("raising exception")
         raise Exception("Artificial runner exception - for testing purposes only.")
     if EXO_RUNNER_MUST_OOM in prompt:
-        mlx_force_oom()
+        if engine_force_oom:
+            engine_force_oom()
+        else:
+            logger.warning("OOM test not supported for current engine")
     if EXO_RUNNER_MUST_TIMEOUT in prompt:
         time.sleep(100)

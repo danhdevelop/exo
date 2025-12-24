@@ -333,8 +333,6 @@ dependencies = [
     { name = "huggingface-hub", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "hypercorn", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "loguru", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
-    { name = "mlx-lm", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "networkx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "protobuf", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "psutil", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
@@ -345,8 +343,16 @@ dependencies = [
     { name = "sqlmodel", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "textual", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "tiktoken", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "tinygrad", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "transformers", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "typeguard", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
     { name = "types-aiofiles", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+]
+
+[package.optional-dependencies]
+mlx = [
+    { name = "mlx", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "mlx-lm", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -374,8 +380,8 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=0.33.4" },
     { name = "hypercorn", specifier = ">=0.18.0" },
     { name = "loguru", specifier = ">=0.7.3" },
-    { name = "mlx", specifier = ">=0.29.3" },
-    { name = "mlx-lm", specifier = ">=0.28.3" },
+    { name = "mlx", marker = "extra == 'mlx'", specifier = ">=0.29.3" },
+    { name = "mlx-lm", marker = "extra == 'mlx'", specifier = ">=0.28.3" },
     { name = "networkx", specifier = ">=3.5" },
     { name = "protobuf", specifier = ">=6.32.0" },
     { name = "psutil", specifier = ">=7.0.0" },
@@ -386,9 +392,12 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.24" },
     { name = "textual", specifier = ">=5.3.0" },
     { name = "tiktoken", specifier = ">=0.12.0" },
+    { name = "tinygrad", git = "https://github.com/tinygrad/tinygrad.git?rev=ec120ce6b9ce8e4ff4b5692566a683ef240e8bc8" },
+    { name = "transformers", specifier = ">=4.46.3" },
     { name = "typeguard", specifier = ">=4.4.4" },
     { name = "types-aiofiles", specifier = ">=24.1.0.20250708" },
 ]
+provides-extras = ["mlx"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1504,6 +1513,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/28/c0/3c7a39ff68022ddfd7d93f3337ad90389a342f761c4d71de99a3ccc57857/tiktoken-0.12.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:54c891b416a0e36b8e2045b12b33dd66fb34a4fe7965565f1b482da50da3e86a", size = 1194908, upload-time = "2025-10-06T20:22:32.073Z" },
     { url = "https://files.pythonhosted.org/packages/ab/0d/c1ad6f4016a3968c048545f5d9b8ffebf577774b2ede3e2e352553b685fe/tiktoken-0.12.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:5edb8743b88d5be814b1a8a8854494719080c28faaa1ccbef02e87354fe71ef0", size = 1253706, upload-time = "2025-10-06T20:22:33.385Z" },
 ]
+
+[[package]]
+name = "tinygrad"
+version = "0.10.0"
+source = { git = "https://github.com/tinygrad/tinygrad.git?rev=ec120ce6b9ce8e4ff4b5692566a683ef240e8bc8#ec120ce6b9ce8e4ff4b5692566a683ef240e8bc8" }
 
 [[package]]
 name = "tokenizers"

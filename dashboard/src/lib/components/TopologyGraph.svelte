@@ -426,6 +426,7 @@ function wrapLine(text: string, maxLen: number): string[] {
 			const macmon = node.macmon_info;
 			const modelId = node.system_info?.model_id || 'Unknown';
 			const friendlyName = node.friendly_name || modelId;
+			const engine = node.engine || 'mlx';
 
 			let ramUsagePercent = 0;
 			let gpuTemp = NaN;
@@ -818,13 +819,13 @@ function wrapLine(text: string, maxLen: number): string[] {
 				// FULL MODE: Name above, memory info below (1-4 nodes)
 				const nameY = nodeInfo.y - iconBaseHeight / 2 - 15;
 				const fontSize = Math.max(10, nodeRadius * 0.16);
-				
+
 				// Truncate name based on node count
 				const maxNameLen = numNodes === 1 ? 22 : (numNodes === 2 ? 18 : numNodes === 3 ? 16 : 14);
-				const displayName = friendlyName.length > maxNameLen 
+				const displayName = friendlyName.length > maxNameLen
 					? friendlyName.slice(0, maxNameLen - 2) + '..'
 					: friendlyName;
-				
+
 				// Name label above
 				nodeG.append('text')
 					.attr('x', nodeInfo.x)
@@ -855,13 +856,25 @@ function wrapLine(text: string, maxLen: number): string[] {
 					.attr('fill', 'rgba(179,179,179,0.7)')
 					.text(` (${ramUsagePercent.toFixed(0)}%)`);
 
+				// Engine info below memory
+				const engineY = infoY + 12;
+				nodeG.append('text')
+					.attr('x', nodeInfo.x)
+					.attr('y', engineY)
+					.attr('text-anchor', 'middle')
+					.attr('fill', engine === 'tinygrad' ? 'rgba(147,197,253,0.9)' : 'rgba(251,146,60,0.9)')
+					.attr('font-size', fontSize * 0.75)
+					.attr('font-weight', '600')
+					.attr('font-family', 'SF Mono, Monaco, monospace')
+					.text(`[${engine.toUpperCase()}]`);
+
 			} else if (showCompactLabels) {
 				// COMPACT MODE: Just name and basic info (4+ nodes)
 				const fontSize = Math.max(7, nodeRadius * 0.11);
-				
+
 				// Very compact name below icon
 				const nameY = nodeInfo.y + iconBaseHeight / 2 + 9;
-				const shortName = friendlyName.length > 10 
+				const shortName = friendlyName.length > 10
 					? friendlyName.slice(0, 8) + '..'
 					: friendlyName;
 				nodeG.append('text')
@@ -873,24 +886,31 @@ function wrapLine(text: string, maxLen: number): string[] {
 					.attr('font-family', 'SF Mono, Monaco, monospace')
 					.text(shortName);
 
-				// Single line of key stats
+				// Single line of key stats with engine
 				const statsY = nameY + 9;
-				nodeG.append('text')
+				const engineBadge = engine === 'tinygrad' ? 'TG' : 'MLX';
+				const engineColor = engine === 'tinygrad' ? 'rgba(147,197,253,0.9)' : 'rgba(251,146,60,0.9)';
+				const statsText = nodeG.append('text')
 					.attr('x', nodeInfo.x)
 					.attr('y', statsY)
 					.attr('text-anchor', 'middle')
-					.attr('fill', 'rgba(255,215,0,0.7)')
 					.attr('font-size', fontSize * 0.85)
-					.attr('font-family', 'SF Mono, Monaco, monospace')
+					.attr('font-family', 'SF Mono, Monaco, monospace');
+				statsText.append('tspan')
+					.attr('fill', engineColor)
+					.attr('font-weight', '600')
+					.text(`[${engineBadge}] `);
+				statsText.append('tspan')
+					.attr('fill', 'rgba(255,215,0,0.7)')
 					.text(`${ramUsagePercent.toFixed(0)}%${!isNaN(gpuTemp) ? ' ' + gpuTemp.toFixed(0) + '°C' : ''}`);
 
 			} else {
 				// MINIMIZED MODE: Show name above and memory info below (like main topology)
 				const fontSize = 8;
-				
+
 				// Friendly name (shortened) above icon
 				const nameY = nodeInfo.y - iconBaseHeight / 2 - 8;
-				const shortName = friendlyName.length > 12 
+				const shortName = friendlyName.length > 12
 					? friendlyName.slice(0, 10) + '..'
 					: friendlyName;
 				nodeG.append('text')
@@ -920,6 +940,19 @@ function wrapLine(text: string, maxLen: number): string[] {
 				memTextMini.append('tspan')
 					.attr('fill', 'rgba(179,179,179,0.7)')
 					.text(` (${ramUsagePercent.toFixed(0)}%)`);
+
+				// Engine badge below memory
+				const engineY = infoY + 9;
+				const engineBadge = engine === 'tinygrad' ? 'TG' : 'MLX';
+				nodeG.append('text')
+					.attr('x', nodeInfo.x)
+					.attr('y', engineY)
+					.attr('text-anchor', 'middle')
+					.attr('fill', engine === 'tinygrad' ? 'rgba(147,197,253,0.9)' : 'rgba(251,146,60,0.9)')
+					.attr('font-size', fontSize * 0.75)
+					.attr('font-weight', '600')
+					.attr('font-family', 'SF Mono, Monaco, monospace')
+					.text(`[${engineBadge}]`);
 			}
 		});
 
