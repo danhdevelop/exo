@@ -3,6 +3,11 @@ digest.txt
 
 # python
 **/__pycache__
+*.cover
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
 
 # nix
 .direnv/
@@ -32,3 +37,4 @@ exo.log
 
 # VSCode
 .vscode
+sync_exec.sh

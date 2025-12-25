@@ -49,10 +49,11 @@ def repeat_kv(x: Tensor, n_rep: int) -> Tensor:
   return x.repeat((1, 1, 1, n_rep)).reshape(bs, seqlen, n_kv_heads*n_rep, head_dim)
 
 class Attention:
-  def __init__(self, dim, n_heads, n_kv_heads, max_context, linear=nn.Linear):
+  def __init__(self, dim, n_heads, n_kv_heads, max_context, linear=nn.Linear, head_dim=None):
     self.n_heads = n_heads
     self.n_kv_heads = n_kv_heads if n_kv_heads is not None else n_heads  # n_kv_heads != n_heads implies MQA [arxiv/2307.09288, A.2.1]
-    self.head_dim = dim // n_heads
+    # Use explicit head_dim if provided, otherwise calculate from dim
+    self.head_dim = head_dim if head_dim is not None else (dim // n_heads)
     self.n_rep = self.n_heads // self.n_kv_heads
     self.max_context = max_context
 
@@ -105,8 +106,8 @@ class FeedForward:
 
 
 class TransformerBlock:
-  def __init__(self, dim: int, hidden_dim: int, n_heads: int, n_kv_heads: int, norm_eps: float, max_context: int, linear=nn.Linear, feed_forward=FeedForward):
-    self.attention = Attention(dim, n_heads, n_kv_heads, max_context, linear)
+  def __init__(self, dim: int, hidden_dim: int, n_heads: int, n_kv_heads: int, norm_eps: float, max_context: int, linear=nn.Linear, feed_forward=FeedForward, head_dim=None):
+    self.attention = Attention(dim, n_heads, n_kv_heads, max_context, linear, head_dim=head_dim)
     self.feed_forward = feed_forward(dim, hidden_dim, linear)
     self.attention_norm = nn.RMSNorm(dim, norm_eps)
     self.ffn_norm = nn.RMSNorm(dim, norm_eps)
@@ -127,9 +128,9 @@ def sample_logits(logits: Tensor, temp: float, k: int, p: float, af: float, ap: 
 
   # alpha sampling
   if af or ap:
-    if not hasattr(sample, "alpha_counter"):
-      setattr(sample, "alpha_counter", Tensor.zeros_like(logits, dtype=dtypes.int32).contiguous())
-    logits = logits - (sample.alpha_counter*af + (sample.alpha_counter > 0)*ap)
+    if not hasattr(sample_logits, "alpha_counter"):
+      setattr(sample_logits, "alpha_counter", Tensor.zeros_like(logits, dtype=dtypes.int32).contiguous())
+    logits = logits - (sample_logits.alpha_counter*af + (sample_logits.alpha_counter > 0)*ap)
 
   # replace NaNs with -inf
   logits = (logits != logits).where(-float("inf"), logits)
@@ -161,7 +162,7 @@ def sample_logits(logits: Tensor, temp: float, k: int, p: float, af: float, ap: 
 
   # increase alpha counter
   if af or ap:
-    sample.alpha_counter = (counter == output_token).where(sample.alpha_counter + 1, sample.alpha_counter)
+    sample_logits.alpha_counter = (counter == output_token).where(sample_logits.alpha_counter + 1, sample_logits.alpha_counter)
 
   return output_token
 
@@ -178,7 +179,7 @@ class Transformer:
     n_layers: int,
     norm_eps: float,
     vocab_size,
-    shard: Shard = None,
+    shard: ShardMetadata = None,
     linear=nn.Linear,
     n_kv_heads=None,
     rope_theta=10000,
@@ -187,15 +188,18 @@ class Transformer:
     feed_forward=FeedForward,
     rope_scaling: Optional[Dict[str, float]] = None,
     tie_word_embeddings=False,
+    head_dim=None,
   ):
-    self.layers = [TransformerBlock(dim, hidden_dim, n_heads, n_kv_heads, norm_eps, max_context, linear, feed_forward=feed_forward) for _ in range(n_layers)]
+    # Use explicit head_dim if provided, otherwise calculate from dim
+    self.head_dim = head_dim if head_dim is not None else (dim // n_heads)
+    self.layers = [TransformerBlock(dim, hidden_dim, n_heads, n_kv_heads, norm_eps, max_context, linear, feed_forward=feed_forward, head_dim=self.head_dim) for _ in range(n_layers)]
     self.norm = nn.RMSNorm(dim, norm_eps)
     self.tok_embeddings = nn.Embedding(vocab_size, dim)
     self.output = nn.Linear(dim, vocab_size, bias=False)
     if tie_word_embeddings:
       self.output.weight = self.tok_embeddings.weight
     self.max_context = max_context
-    self.freqs_cis = precompute_freqs_cis(dim // n_heads, self.max_context*2, rope_theta, rope_scaling=rope_scaling).contiguous()
+    self.freqs_cis = precompute_freqs_cis(self.head_dim, self.max_context*2, rope_theta, rope_scaling=rope_scaling).contiguous()
     self.forward_jit = TinyJit(self.forward_base) if jit else None
     self.shard = shard
 
@@ -212,14 +216,14 @@ class Transformer:
       layer = self.layers[i]
       h = layer(h, start_pos, freqs_cis, mask, cache=c)
 
-    if self.shard.is_last_layer():
+    if self.shard.is_last_layer:
       logits = self.output(self.norm(h)).float().realize()
       return logits
     else:
       return h
 
   def embed(self, inputs: Tensor):
-    if self.shard.is_first_layer():
+    if self.shard.is_first_layer:
       h = self.tok_embeddings(inputs)
     else:
       h = inputs
@@ -244,11 +248,11 @@ class TransformerShard:
   ):
     shardrange = range(shard.start_layer, shard.end_layer + 1)
     self.layers = [layer for layer, n in zip(base.layers, range(shard.n_layers)) if n in shardrange]
-    self.norm = base.norm 
+    self.norm = base.norm
     self.tok_embeddings = base.tok_embeddings
-    self.embed = (lambda x: self.tok_embeddings(x)) if shard.is_first_layer() else (lambda x: x)
+    self.embed = (lambda x: self.tok_embeddings(x)) if shard.is_first_layer else (lambda x: x)
     self.output = base.output
-    self.post = (lambda x: self.output(x)) if shard.is_last_layer() else (lambda x: x)
+    self.post = (lambda x: self.output(x)) if shard.is_last_layer else (lambda x: x)
     self.max_context = base.max_context
     self.null_cache = [None for _ in shardrange] 
     self.freqs_cis = base.freqs_cis
@@ -280,6 +284,9 @@ class TransformerShard:
 
 def convert_from_huggingface(weights: Dict[str, Tensor], model: Transformer, n_heads: int, n_kv_heads: int):
   def permute(v: Tensor, n_heads: int):
+    # Only permute 2D weight matrices, skip 1D tensors (e.g., biases, norms)
+    if len(v.shape) != 2:
+      return v
     return v.reshape(n_heads, 2, v.shape[0] // n_heads // 2, v.shape[1]).transpose(1, 2).reshape(*v.shape[:2])
 
   keymap = {
@@ -301,7 +308,7 @@ def convert_from_huggingface(weights: Dict[str, Tensor], model: Transformer, n_h
   for k, v in weights.items():
     if ".rotary_emb." in k: continue
     v = v.to(Device.DEFAULT)
-    if "model.layers" in k:
+    if "model.layers" in k and ".weight" in k:
       if "q_proj" in k:
         v = permute(v, n_heads)
       elif "k_proj" in k:

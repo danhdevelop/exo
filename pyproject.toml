@@ -29,7 +29,7 @@ dependencies = [
     "exo_pyo3_bindings", # rust bindings
     "anyio==4.11.0",
     "bidict>=0.23.1",
-    "tinygrad @ git+https://github.com/tinygrad/tinygrad.git@ec120ce6b9ce8e4ff4b5692566a683ef240e8bc8",
+    "tinygrad @ git+https://github.com/danhdevelop/tinygrad.git",
     "transformers>=4.46.3",  # required for tinygrad tokenizers
     "tiktoken>=0.12.0", # required for kimi k2 tokenizer
     "hypercorn>=0.18.0",

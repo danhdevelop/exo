@@ -20,6 +20,10 @@ def entrypoint(
     task_receiver: MpReceiver[Task],
     _logger: "loguru.Logger",
 ) -> None:
+    # Disable tinygrad disk cache to avoid SQLite threading issues in multiprocessing
+    # The SQLite connection is created in the parent process and cannot be used in child processes
+    os.environ["CACHELEVEL"] = "0"
+
     if (
         isinstance(bound_instance.instance, MlxJacclInstance)
         and len(bound_instance.instance.ibv_devices) >= 2

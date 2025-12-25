@@ -13,6 +13,12 @@ from exo.shared.types.profiling import (
     SystemPerformanceProfile,
 )
 
+from .linux_monitor import (
+    LinuxMonitorError,
+)
+from .linux_monitor import (
+    get_metrics_async as linux_get_metrics_async,
+)
 from .macmon import (
     MacMonError,
     Metrics,
@@ -25,13 +31,30 @@ from .system_info import (
     get_model_and_chip,
     get_network_interfaces,
 )
+from .windows_monitor import (
+    WindowsMonitorError,
+)
+from .windows_monitor import (
+    get_metrics_async as windows_get_metrics_async,
+)
 
 
 async def get_metrics_async() -> Metrics | None:
-    """Return detailed Metrics on macOS or a minimal fallback elsewhere."""
+    """Return detailed Metrics based on the platform."""
 
-    if platform.system().lower() == "darwin":
-        return await macmon_get_metrics_async()
+    system = platform.system().lower()
+
+    try:
+        if system == "darwin":
+            return await macmon_get_metrics_async()
+        elif system == "windows":
+            return await windows_get_metrics_async()
+        elif system == "linux":
+            return await linux_get_metrics_async()
+    except (MacMonError, WindowsMonitorError, LinuxMonitorError) as e:
+        logger.warning(f"Failed to get platform metrics: {e}")
+
+    return None
 
 
 def get_memory_profile() -> MemoryPerformanceProfile:
@@ -61,7 +84,7 @@ async def start_polling_memory_metrics(
         try:
             mem = get_memory_profile()
             await callback(mem)
-        except MacMonError as e:
+        except (MacMonError, WindowsMonitorError, LinuxMonitorError) as e:
             logger.opt(exception=e).error("Memory Monitor encountered error")
         finally:
             await anyio.sleep(poll_interval_s)
@@ -123,7 +146,7 @@ async def start_polling_node_metrics(
             logger.warning(
                 "[resource_monitor] Operation timed out after 30s, skipping this cycle."
             )
-        except MacMonError as e:
+        except (MacMonError, WindowsMonitorError, LinuxMonitorError) as e:
             logger.opt(exception=e).error("Resource Monitor encountered error")
             return
         finally:

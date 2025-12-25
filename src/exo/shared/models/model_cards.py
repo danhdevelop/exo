@@ -66,7 +66,20 @@ MODEL_CARDS: dict[str, ModelCard] = {
         metadata=ModelMetadata(
             model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-8bit"),
             pretty_name="DeepSeek Coder V2 Lite (8-bit)",
-            storage_size=Memory.from_gb(15000),
+            storage_size=Memory.from_gb(15),
+            n_layers=27,
+        ),
+    ),
+    "deepseek-coder-v2-lite-4bit": ModelCard(
+        short_id="deepseek-coder-v2-lite-4bit",
+        model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx"),
+        name="DeepSeek Coder V2 Lite (4-bit)",
+        description="""DeepSeek V3.1 is a large language model trained on the DeepSeek V3.1 dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-4bit-mlx"),
+            pretty_name="DeepSeek Coder V2 Lite (4-bit)",
+            storage_size=Memory.from_gb(8.84),
             n_layers=27,
         ),
     ),
@@ -276,6 +289,19 @@ MODEL_CARDS: dict[str, ModelCard] = {
         ),
     ),
     # qwen2.5
+    "qwen-2.5-coder-14b": ModelCard(
+        short_id="qwen-2.5-coder-14b",
+        model_id=ModelId("mlx-community/Qwen2.5-Coder-14B-4bit"),
+        name="Qwen 2.5 Coder 14B (4-bit)",
+        description="""Qwen 2.5 Coder 32B is a large language model trained on the Phi 3 Mini dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/Qwen2.5-Coder-14B-4bit"),
+            pretty_name="Qwen 2.5 Coder 14B (4-bit)",
+            storage_size=Memory.from_gb(8.32),
+            n_layers=48,
+        ),
+    ),
     "qwen-2.5-coder-32b": ModelCard(
         short_id="qwen-2.5-coder-32b",
         model_id=ModelId("mlx-community/Qwen2.5-Coder-32B-4bit"),
@@ -342,19 +368,6 @@ MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=48,
         ),
     ),
-    "qwen3-25b-coder": ModelCard(
-        short_id="qwen3-25b-coder",
-        model_id=ModelId("AIMLNewbie/Qwen3-Coder-REAP-25B-A3B-mlx-4Bit"),
-        name="Qwen3 Coder 25B A3B (4-bit)",
-        description="""Qwen3 Coder 25B is a large language model trained on the Qwen3 Coder 25B dataset.""",
-        tags=[],
-        metadata=ModelMetadata(
-            model_id=ModelId("AIMLNewbie/Qwen3-Coder-REAP-25B-A3B-mlx-4Bit"),
-            pretty_name="Qwen3 Coder 25B A3B (4-bit)",
-            storage_size=Memory.from_mb(16797),
-            n_layers=48,
-        ),
-    ),
     "qwen3-30b-coder": ModelCard(
         short_id="qwen3-30b-coder",
         model_id=ModelId("nightmedia/unsloth-Qwen3-Coder-30B-A3B-Instruct-qx4-mlx"),
@@ -364,19 +377,6 @@ MODEL_CARDS: dict[str, ModelCard] = {
         metadata=ModelMetadata(
             model_id=ModelId("nightmedia/unsloth-Qwen3-Coder-30B-A3B-Instruct-qx4-mlx"),
             pretty_name="Qwen3 Coder 30B A3B (4-bit)",
-            storage_size=Memory.from_mb(16797),
-            n_layers=48,
-        ),
-    ),
-    "qwen3-30b-coder-3bit": ModelCard(
-        short_id="qwen3-30b-coder-3bit",
-        model_id=ModelId("mlx-community/Qwen3-Coder-30B-A3B-Instruct-3bit"),
-        name="Qwen3 Coder 30B A3B (3-bit)",
-        description="""Qwen3 Coder 30B is a large language model trained on the Qwen3 Coder 30B dataset.""",
-        tags=[],
-        metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/Qwen3-Coder-30B-A3B-Instruct-3bit"),
-            pretty_name="Qwen3 Coder 30B A3B (3-bit)",
             storage_size=Memory.from_mb(16797),
             n_layers=48,
         ),
@@ -446,33 +446,60 @@ MODEL_CARDS: dict[str, ModelCard] = {
             n_layers=62,
         ),
     ),
-    # granite
-    "granite-3.3-2b": ModelCard(
-        short_id="granite-3.3-2b",
-        model_id=ModelId("mlx-community/granite-3.3-2b-instruct-fp16"),
-        name="Granite 3.3 2B (FP16)",
-        description="""Granite-3.3-2B-Instruct is a 2-billion parameter 128K context length language model fine-tuned for improved reasoning and instruction-following capabilities.""",
+    # gemma
+    "gemma-3-12b-4bit": ModelCard(
+        short_id="gemma-3-12b-4bit",
+        model_id=ModelId("mlx-community/gemma-3-12b-it-4bit-DWQ"),
+        name="Gemma 3 12B (4-bit)",
+        description="""Gemma 3 12B is a large language model trained on the Gemma 3 dataset.""",
         tags=[],
         metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/granite-3.3-2b-instruct-fp16"),
-            pretty_name="Granite 3.3 2B (FP16)",
-            storage_size=Memory.from_mb(4951),
-            n_layers=40,
+            model_id=ModelId("mlx-community/gemma-3-12b-it-4bit-DWQ"),
+            pretty_name="Gemma 3 12B (4-bit)",
+            storage_size=Memory.from_gb(7.23),
+            n_layers=48,
         ),
     ),
-    # "granite-3.3-8b": ModelCard(
-    #     short_id="granite-3.3-8b",
-    #     model_id=ModelId("mlx-community/granite-3.3-8b-instruct-fp16"),
-    #     name="Granite 3.3 8B",
-    #     description="""Granite-3.3-8B-Instruct is a 8-billion parameter 128K context length language model fine-tuned for improved reasoning and instruction-following capabilities.""",
+    "gemma-3-27b-4bit": ModelCard(
+        short_id="gemma-3-27b-4bit",
+        model_id=ModelId("mlx-community/gemma-3-27b-it-4bit-DWQ"),
+        name="Gemma 3 27B (4-bit)",
+        description="""Gemma 3 27B is a large language model trained on the Gemma 3 dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/gemma-3-27b-it-4bit-DWQ"),
+            pretty_name="Gemma 3 27B (4-bit)",
+            storage_size=Memory.from_gb(16),
+            n_layers=62,
+        ),
+    ),
+    # granite
+    # "granite-3.3-2b": ModelCard(
+    #     short_id="granite-3.3-2b",
+    #     model_id=ModelId("mlx-community/granite-3.3-2b-instruct-fp16"),
+    #     name="Granite 3.3 2B (FP16)",
+    #     description="""Granite-3.3-2B-Instruct is a 2-billion parameter 128K context length language model fine-tuned for improved reasoning and instruction-following capabilities.""",
     #     tags=[],
     #     metadata=ModelMetadata(
-    #         model_id=ModelId("mlx-community/granite-3.3-8b-instruct-fp16"),
-    #         pretty_name="Granite 3.3 8B",
-    #         storage_size=Memory.from_kb(15958720),
+    #         model_id=ModelId("mlx-community/granite-3.3-2b-instruct-fp16"),
+    #         pretty_name="Granite 3.3 2B (FP16)",
+    #         storage_size=Memory.from_mb(4951),
     #         n_layers=40,
     #     ),
     # ),
+    "granite-3.3-8b": ModelCard(
+        short_id="granite-3.3-8b",
+        model_id=ModelId("mlx-community/granite-3.3-8b-instruct-fp16"),
+        name="Granite 3.3 8B",
+        description="""Granite-3.3-8B-Instruct is a 8-billion parameter 128K context length language model fine-tuned for improved reasoning and instruction-following capabilities.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/granite-3.3-8b-instruct-fp16"),
+            pretty_name="Granite 3.3 8B",
+            storage_size=Memory.from_kb(15958720),
+            n_layers=40,
+        ),
+    ),
     # smol-lm
     # "smol-lm-135m": ModelCard(
     #     short_id="smol-lm-135m",

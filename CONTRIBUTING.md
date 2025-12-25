@@ -11,10 +11,12 @@ To run EXO from source:
   ```bash
   brew install uv
   ```
-- [macmon](https://github.com/vladkens/macmon) (for hardware monitoring on Apple Silicon)
-  ```bash
-  brew install macmon
-  ```
+- Hardware monitoring tools (optional, for enhanced system metrics):
+  - **macOS**: [macmon](https://github.com/vladkens/macmon) for Apple Silicon
+    ```bash
+    brew install macmon
+    ```
+  - **Windows/Linux**: `nvidia-smi` (included with NVIDIA drivers) or `rocm-smi` (included with AMD ROCm) for GPU monitoring
 
 ```bash
 git clone https://github.com/exo-explore/exo.git

@@ -67,10 +67,32 @@ uv run exo
 The tinygrad engine uses the following environment variables for configuration:
 
 - `INFERENCE_ENGINE`: Set to `tinygrad` to use this engine (default: `mlx`)
+- `TINYGRAD_DEVICE` or `DEVICE`: Manually specify the device backend (e.g., `QCOM`, `WEBGPU`, `CL`, `CUDA`, `CPU`)
 - `TEMPERATURE`: Sampling temperature (default: 0.85)
 - `TOP_K`: Top-k sampling parameter (default: 25)
 - `TOP_P`: Top-p (nucleus) sampling parameter (default: 0.9)
 - `MAX_TOKENS`: Maximum tokens to generate (default: 8192)
+
+### GPU and Vulkan Support
+
+The tinygrad engine now automatically detects and uses the best available GPU backend. Device selection priority:
+
+1. **QCOM** (Qualcomm) - For Snapdragon X Elite and other Qualcomm processors (uses Vulkan)
+2. **WEBGPU** - Vulkan-based backend with wide hardware compatibility
+3. **CL** (OpenCL) - May use Vulkan ICD on some systems
+4. **METAL** - For Apple Silicon
+5. **CUDA** - For NVIDIA GPUs
+6. **HIP/AMD** - For AMD GPUs
+7. **CPU** - Fallback when no GPU is available
+
+This enables support for systems like Ubuntu on Snapdragon X Elite and other ARM-based platforms with Vulkan support.
+
+To manually select a device:
+```bash
+TINYGRAD_DEVICE=QCOM uv run exo  # Force Qualcomm backend
+TINYGRAD_DEVICE=WEBGPU uv run exo  # Force WebGPU/Vulkan backend
+TINYGRAD_DEVICE=CPU uv run exo  # Force CPU backend
+```
 
 ## Supported Models
 
@@ -96,10 +118,12 @@ The tinygrad engine requires:
 
 ## Differences from MLX Engine
 
-- Tinygrad runs on CPU by default (MLX uses GPU on Apple Silicon)
+- Tinygrad supports multiple backends (QCOM/Vulkan, WEBGPU, OpenCL, CUDA, HIP, METAL, CPU)
+- MLX is limited to Apple Silicon GPUs
+- Tinygrad has wider hardware compatibility including Snapdragon X Elite and other ARM platforms
 - Different memory management strategies
 - Simpler distributed inference setup
-- May have different performance characteristics
+- May have different performance characteristics depending on the backend
 
 ## Development Status
 

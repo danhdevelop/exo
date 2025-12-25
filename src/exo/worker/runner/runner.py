@@ -1,5 +1,7 @@
 import time
 import os
+import asyncio
+import inspect
 
 from exo.shared.types.api import ChatCompletionMessageText
 from exo.shared.types.chunks import TokenChunk
@@ -107,7 +109,11 @@ def main(
                             )
                         )
 
-                        model, tokenizer, sampler = initialize_engine(bound_instance)
+                        result = initialize_engine(bound_instance)
+                        if inspect.iscoroutine(result):
+                            model, tokenizer, sampler = asyncio.run(result)
+                        else:
+                            model, tokenizer, sampler = result
 
                         current_status = RunnerLoaded()
                         logger.info("runner loaded")

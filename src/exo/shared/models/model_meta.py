@@ -2,7 +2,6 @@ from typing import Annotated
 
 import aiofiles
 import aiofiles.os as aios
-from huggingface_hub import model_info
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -84,10 +83,22 @@ async def get_safetensors_size(model_id: str) -> Memory:
     if metadata is not None:
         return Memory.from_bytes(metadata.total_size)
 
-    info = model_info(model_id)
-    if info.safetensors is None:
-        raise ValueError(f"No safetensors info found for {model_id}")
-    return Memory.from_bytes(info.safetensors.total)
+    # Fallback: compute size from local safetensors files
+    total_size = 0
+    # Use set to avoid counting duplicate filenames
+    unique_files = set(index_data.weight_map.values())
+    for filename in unique_files:
+        file_path = target_dir / filename
+        if await aios.path.exists(file_path):
+            stat = await aios.stat(file_path)
+            total_size += stat.st_size
+        else:
+            logger.warning(f"Safetensors file not found: {file_path}")
+
+    if total_size == 0:
+        raise ValueError(f"No safetensors files found for {model_id}")
+
+    return Memory.from_bytes(total_size)
 
 
 _model_meta_cache: dict[str, ModelMetadata] = {}

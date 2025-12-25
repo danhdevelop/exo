@@ -284,21 +284,78 @@ def apply_chat_template(
 
     formatted_messages: list[dict[str, Any]] = []
     for _, message in enumerate(messages):
-        if isinstance(message.content, ChatCompletionMessageText):
-            message.content = message.content.text
-        if isinstance(message.content, list):
-            if len(message.content) != 1:
-                logger.warning("Received malformed prompt")
-                continue
+        # Convert content to appropriate plain Python type
+        content: str | list[dict[str, str]] | None = None
 
-            message.content = message.content[0].text
-        if message.content is None and message.thinking is None:
+        if isinstance(message.content, ChatCompletionMessageText):
+            # Single text object - convert to string
+            content = message.content.text
+        elif isinstance(message.content, list):
+            # List of text objects - convert to list of dicts
+            content = [{"type": "text", "text": item.text} for item in message.content]
+        elif isinstance(message.content, str):
+            # Already a string
+            content = message.content
+        elif message.content is None:
+            # No content
+            content = None
+
+        # Skip messages with no content and no thinking
+        if content is None and message.thinking is None:
             continue
 
-        # Null values are not valid when applying templates in tokenizer
-        formatted_messages.append(
-            {k: v for k, v in message.model_dump().items() if v is not None}  # type: ignore
-        )
+        # Build message dict manually with only plain Python types
+        # This ensures the Jinja template receives only simple types
+        msg_dict: dict[str, Any] = {
+            "role": message.role,
+        }
+
+        # Add content if present
+        if content is not None:
+            msg_dict["content"] = content
+
+        # Add thinking if present
+        if message.thinking is not None:
+            msg_dict["thinking"] = message.thinking
+
+        # Add optional fields only if they're present
+        if message.name is not None:
+            msg_dict["name"] = message.name
+
+        if message.tool_calls is not None:
+            # Convert tool_calls to plain Python types (in case they're Pydantic models)
+            if isinstance(message.tool_calls, list):
+                msg_dict["tool_calls"] = [
+                    tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc
+                    for tc in message.tool_calls
+                ]
+            else:
+                msg_dict["tool_calls"] = message.tool_calls
+
+        if message.tool_call_id is not None:
+            msg_dict["tool_call_id"] = message.tool_call_id
+
+        if message.function_call is not None:
+            # Convert function_call to plain Python types (in case it's a Pydantic model)
+            if hasattr(message.function_call, 'model_dump'):
+                msg_dict["function_call"] = message.function_call.model_dump(mode='python')
+            else:
+                msg_dict["function_call"] = message.function_call
+
+        formatted_messages.append(msg_dict)
+
+    # Debug: Log the formatted messages to see what we're passing to the template
+    logger.debug(f"Formatted messages for template: {formatted_messages}")
+
+    # Ensure all items are plain dicts with plain Python types
+    import json
+    try:
+        # This will fail if there are non-serializable objects
+        json.dumps(formatted_messages)
+    except (TypeError, ValueError) as e:
+        logger.error(f"Messages contain non-serializable objects: {e}")
+        logger.error(f"Messages: {formatted_messages}")
+        raise
 
     prompt: str = tokenizer.apply_chat_template(  # type: ignore
         formatted_messages,

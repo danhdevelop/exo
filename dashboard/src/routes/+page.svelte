@@ -1357,8 +1357,24 @@ function toggleInstanceDownloadDetails(nodeId: string): void {
 									{@const foundModel = models.find(m => m.id === selectedModelId)}
 									{#if foundModel}
 										{@const sizeGB = getModelSizeGB(foundModel)}
+										{@const modelCanFit = hasEnoughMemory(foundModel)}
+										{@const downloadStatus = getModelDownloadStatus(foundModel.id)}
 										<span class="flex items-center justify-between gap-2 w-full pr-4">
-											<span class="text-exo-light-gray truncate">{foundModel.name || foundModel.id}</span>
+											<span class="text-exo-light-gray truncate flex items-center gap-2">
+												{foundModel.name || foundModel.id}
+												{#if downloadStatus.isDownloading}
+													<!-- Downloading indicator -->
+													<svg class="w-3.5 h-3.5 animate-spin text-blue-400/80" fill="none" viewBox="0 0 24 24" title="Downloading">
+														<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+														<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+													</svg>
+												{:else if modelCanFit}
+													<!-- Ready indicator -->
+													<svg class="w-3.5 h-3.5 text-green-400/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" title="Ready to run">
+														<path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+													</svg>
+												{/if}
+											</span>
 											<span class="text-white/50 text-xs flex-shrink-0">{sizeGB >= 1 ? sizeGB.toFixed(0) : sizeGB.toFixed(1)}GB</span>
 										</span>
 									{:else}
@@ -1397,12 +1413,13 @@ function toggleInstanceDownloadDetails(nodeId: string): void {
 									
 									<!-- Options -->
 									<div class="py-1">
-										{#each sortedModels().filter(m => 
-											!modelDropdownSearch || 
+										{#each sortedModels().filter(m =>
+											!modelDropdownSearch ||
 											(m.name || m.id).toLowerCase().includes(modelDropdownSearch.toLowerCase())
 										) as model}
 											{@const sizeGB = getModelSizeGB(model)}
 											{@const modelCanFit = hasEnoughMemory(model)}
+											{@const downloadStatus = getModelDownloadStatus(model.id)}
 											<button
 												type="button"
 												onclick={() => {
@@ -1414,14 +1431,33 @@ function toggleInstanceDownloadDetails(nodeId: string): void {
 												}}
 												disabled={!modelCanFit}
 												class="w-full px-3 py-2 text-left text-sm font-mono tracking-wide transition-colors duration-100 flex items-center justify-between gap-2 {
-													selectedModelId === model.id 
-														? 'bg-transparent text-exo-yellow cursor-pointer' 
-														: modelCanFit 
-															? 'text-white/80 hover:text-exo-yellow cursor-pointer' 
+													selectedModelId === model.id
+														? 'bg-transparent text-exo-yellow cursor-pointer'
+														: modelCanFit
+															? 'text-white/80 hover:text-exo-yellow cursor-pointer'
 															: 'text-white/30 cursor-default'
 												}"
 											>
-												<span class="truncate">{model.name || model.id}</span>
+												<span class="truncate flex items-center gap-2">
+													{model.name || model.id}
+													{#if downloadStatus.isDownloading}
+														<!-- Downloading indicator -->
+														<span class="flex items-center gap-1 text-xs text-blue-400/80" title="Downloading: {downloadStatus.progress?.percentage.toFixed(0)}%">
+															<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+																<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+																<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+															</svg>
+															{downloadStatus.progress?.percentage.toFixed(0)}%
+														</span>
+													{:else if modelCanFit}
+														<!-- Ready indicator (checkmark) -->
+														<span class="flex items-center" title="Ready to run">
+															<svg class="w-3.5 h-3.5 text-green-400/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+															</svg>
+														</span>
+													{/if}
+												</span>
 												<span class="flex-shrink-0 text-xs {modelCanFit ? 'text-white/50' : 'text-red-400/60'}">
 													{sizeGB >= 1 ? sizeGB.toFixed(0) : sizeGB.toFixed(1)}GB
 												</span>

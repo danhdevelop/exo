@@ -1,5 +1,6 @@
 import argparse
 import multiprocessing as mp
+import os
 import signal
 from dataclasses import dataclass, field
 from typing import Self
@@ -189,6 +190,9 @@ class Node:
 
 def main():
     args = Args.parse()
+
+    # Disable tinygrad disk cache to avoid SQLite threading issues in multiprocessing
+    os.environ["CACHELEVEL"] = "0"
 
     mp.set_start_method("spawn")
     # TODO: Refactor the current verbosity system

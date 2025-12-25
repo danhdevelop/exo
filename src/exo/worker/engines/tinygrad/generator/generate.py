@@ -1,9 +1,10 @@
 import asyncio
 import numpy as np
+import os
 from typing import Any, Callable, Generator
 from collections import OrderedDict
 
-from tinygrad import Tensor
+from tinygrad import Tensor, Device
 
 from exo.shared.types.api import ChatCompletionMessage, FinishReason
 from exo.shared.types.tasks import ChatCompletionTaskParams
@@ -76,18 +77,44 @@ def warmup_inference(
     tokens_generated = 0
     max_warmup_tokens = 50
 
-    # Create initial state
+    # Get target device - use Device.DEFAULT which was set by setup_device
+    target_device = Device.DEFAULT
+
+    # Create initial state on CPU first to avoid WebGPU ctypes initialization issues
+    # TinyGrad will automatically transfer to GPU during forward pass
     state = make_prompt_state(Tensor(np.array([tokens])), model)
+
+    # Log device info for first iteration
+    first_iter = True
 
     # Generate warmup tokens
     for _ in range(max_warmup_tokens):
+        # Create input on CPU - let TinyGrad handle device transfer
         x = Tensor(np.array([[state.next_token if hasattr(state, 'next_token') else tokens[-1]]]))
-        h = model.embed(x)
-        out = model.forward(h, start_pos=state.start, cache=state.cache)
+
+        try:
+            h = model.embed(x)
+
+            if first_iter:
+                logger.info(f"Warmup inference devices: input={x.device}, embedding={h.device}, target={target_device}")
+                first_iter = False
+
+            out = model.forward(h, start_pos=state.start, cache=state.cache)
+        except Exception as e:
+            if 'struct_WGPUStringView' in str(e) or 'WEBGPU' in str(e) or 'c_char_Array' in str(e):
+                logger.warning(f"WEBGPU initialization failed: {e}")
+                logger.warning("Falling back to CPU for inference")
+                os.environ['DEVICE'] = 'CPU'
+                Device.DEFAULT = 'CPU'
+                # Retry on CPU
+                h = model.embed(x)
+                out = model.forward(h, start_pos=state.start, cache=state.cache)
+            else:
+                raise
 
         # Sample next token
         logits = out[:, -1, :]
-        next_token = sample_logits(Tensor(logits).flatten(), TEMPERATURE, 0, 0.8, TOP_P, 0.0)
+        next_token = sample_logits(logits.flatten(), TEMPERATURE, 0, 0.8, TOP_P, 0.0)
         next_token_id = int(next_token.realize().numpy())
 
         state.start += 1
@@ -119,7 +146,7 @@ def tinygrad_generate(
     tokens = tokenizer.encode(prompt)
     logger.info(f"Encoded {len(tokens)} tokens")
 
-    # Create initial state
+    # Create initial state on CPU - let TinyGrad handle device transfer
     x = Tensor(np.array([tokens]))
     state = make_prompt_state(x, model)
 
@@ -128,7 +155,7 @@ def tinygrad_generate(
 
     # Generate tokens
     for _ in range(max_tokens):
-        # Get next token input
+        # Get next token input on CPU - let TinyGrad handle device transfer
         if hasattr(state, 'next_token'):
             x = Tensor(np.array([[state.next_token]]))
         else:
@@ -140,7 +167,7 @@ def tinygrad_generate(
         # Sample next token
         logits = out[:, -1, :]
         next_token = sample_logits(
-            Tensor(logits).flatten(),
+            logits.flatten(),
             TEMPERATURE,
             0,
             0.8,
