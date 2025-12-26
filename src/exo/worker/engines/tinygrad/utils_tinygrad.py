@@ -51,14 +51,10 @@ def detect_best_device() -> str:
         logger.info(f"Using manually specified device: {manual_device}")
         return manual_device
 
-    # Get available devices
-    available_devices = list(Device.get_available_devices())
-    logger.info(f"Tinygrad available devices: {available_devices}")
-
-    # Due to WebGPU compatibility issues with wgpu-native on Snapdragon X Elite,
-    # default to CPU until GPU support matures
-    logger.warning("GPU acceleration disabled due to WebGPU/wgpu-native compatibility issues")
-    logger.warning("Using CPU mode - set DEVICE=WEBGPU to attempt GPU acceleration")
+    # Skip GPU detection to avoid WebGPU initialization crashes
+    # GPU support is experimental and causes crashes during device detection
+    logger.info("Defaulting to CPU mode (GPU detection disabled)")
+    logger.info("To use GPU, set DEVICE environment variable (e.g., DEVICE=CL or DEVICE=WEBGPU)")
     return 'CPU'
 
 
