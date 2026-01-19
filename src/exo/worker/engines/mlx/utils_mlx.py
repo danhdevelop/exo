@@ -1,26 +1,42 @@
 import json
 import os
 import resource
+import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
+
+# Monkey-patch for transformers 5.x compatibility
+# Kimi's tokenization_kimi.py imports bytes_to_unicode from the old location
+# which was moved in transformers 5.0.0rc2
+try:
+    import transformers.models.gpt2.tokenization_gpt2 as gpt2_tokenization
+    from transformers.convert_slow_tokenizer import bytes_to_unicode
+
+    if not hasattr(gpt2_tokenization, "bytes_to_unicode"):
+        gpt2_tokenization.bytes_to_unicode = bytes_to_unicode  # type: ignore[attr-defined]
+except ImportError:
+    pass  # transformers < 5.0 or bytes_to_unicode not available
 
 from mlx_lm.models.cache import KVCache, QuantizedKVCache, RotatingKVCache
 from mlx_lm.models.deepseek_v3 import DeepseekV3Model
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.models.gpt_oss import Model as GptOssModel
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 from exo.worker.engines.mlx.constants import (
     CACHE_GROUP_SIZE,
     KV_CACHE_BITS,
-    TEMPERATURE,
     TRUST_REMOTE_CODE,
 )
 
 try:
     from mlx_lm.tokenizer_utils import load_tokenizer
 except ImportError:
-    from mlx_lm.tokenizer_utils import load as load_tokenizer  # type: ignore
+    from mlx_lm.tokenizer_utils import load as load_tokenizer
+import contextlib
+
 import mlx.core as mx
 import mlx.nn as nn
 from mlx_lm.utils import load_model
@@ -48,6 +64,7 @@ from exo.worker.engines.mlx.auto_parallel import (
 )
 from exo.worker.runner.bootstrap import logger
 
+Group = mx.distributed.Group
 # Needed for 8 bit model
 resource.setrlimit(resource.RLIMIT_NOFILE, (2048, 4096))
 
@@ -67,7 +84,46 @@ def get_weights_size(model_shard_meta: ShardMetadata) -> Memory:
     )
 
 
-def mx_barrier(group: mx.distributed.Group | None = None):
+class ModelLoadingTimeoutError(Exception):
+    pass
+
+
+TimeoutCallback = Callable[[], None]
+
+
+def eval_with_timeout(
+    mlx_item: Any,  # pyright: ignore[reportAny]
+    timeout_seconds: float = 60.0,
+    on_timeout: TimeoutCallback | None = None,
+) -> None:
+    """Evaluate MLX item with a hard timeout.
+
+    If on_timeout callback is provided, it will be called before terminating
+    the process. This allows the runner to send a failure event before exit.
+    """
+    completed = threading.Event()
+
+    def watchdog() -> None:
+        if not completed.wait(timeout=timeout_seconds):
+            logger.error(
+                f"mlx_item evaluation timed out after {timeout_seconds:.0f}s. "
+                "This may indicate an issue with FAST_SYNCH and tensor parallel sharding. "
+                "Terminating process."
+            )
+            if on_timeout is not None:
+                on_timeout()
+            os._exit(1)
+
+    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
+    watchdog_thread.start()
+
+    try:
+        mx.eval(mlx_item)  # pyright: ignore[reportAny]
+    finally:
+        completed.set()
+
+
+def mx_barrier(group: Group | None = None):
     mx.eval(
         mx.distributed.all_sum(
             mx.array(1.0),
@@ -77,7 +133,7 @@ def mx_barrier(group: mx.distributed.Group | None = None):
     )
 
 
-def broadcast_from_zero(value: int, group: mx.distributed.Group | None = None):
+def broadcast_from_zero(value: int, group: Group | None = None):
     if group is None:
         return value
 
@@ -99,93 +155,99 @@ class HostList(RootModel[list[str]]):
 
 def mlx_distributed_init(
     bound_instance: BoundInstance,
-) -> mx.distributed.Group:
+) -> Group:
     """
-    Initialize the MLX distributed (runs in thread pool).
-
-    Either hosts or mlx_ibv_devices must be provided:
-    - hosts: traditional host-based connectivity using MLX_HOSTFILE
-    - mlx_ibv_devices: RDMA connectivity matrix using MLX_IBV_DEVICES
-    - mlx_ibv_coordinator: coordinator address (IP:PORT) for RDMA setup
-    - strict: if True, raise an error if the distributed backend is not available
+    Initialize MLX distributed.
     """
     rank = bound_instance.bound_shard.device_rank
     logger.info(f"Starting initialization for rank {rank}")
 
-    # TODO: singleton instances
-    match bound_instance.instance:
-        case MlxRingInstance(hosts=hosts):
-            hostfile = f"./hosts_{rank}.json"
-            hosts_json = HostList.from_hosts(hosts).model_dump_json()
+    coordination_file = None
+    try:
+        # TODO: singleton instances
+        match bound_instance.instance:
+            case MlxRingInstance(hosts_by_node=hosts_by_node, ephemeral_port=_):
+                coordination_file = (
+                    f"./hosts_{bound_instance.instance.instance_id}_{rank}.json"
+                )
+                hosts_for_node = hosts_by_node[bound_instance.bound_node_id]
+                hosts_json = HostList.from_hosts(hosts_for_node).model_dump_json()
 
-            with open(hostfile, "w") as f:
-                _ = f.write(hosts_json)
+                with open(coordination_file, "w") as f:
+                    _ = f.write(hosts_json)
 
-            logger.info(f"rank {rank} hostfile: {hostfile} hosts: {hosts_json}")
+                logger.info(
+                    f"rank {rank} hostfile: {coordination_file} hosts: {hosts_json}"
+                )
 
-            os.environ["MLX_HOSTFILE"] = hostfile
-            os.environ["MLX_RANK"] = str(rank)
-            os.environ["MLX_RING_VERBOSE"] = "1"
-            group = mx.distributed.init(backend="ring", strict=True)
+                os.environ["MLX_HOSTFILE"] = coordination_file
+                os.environ["MLX_RANK"] = str(rank)
+                os.environ["MLX_RING_VERBOSE"] = "1"
+                group = mx.distributed.init(backend="ring", strict=True)
 
-        case MlxJacclInstance(
-            ibv_devices=ibv_devices, jaccl_coordinators=jaccl_coordinators
-        ):
-            # Use RDMA connectivity matrix
-            devices_file = f"./hosts_{rank}.json"
-            ibv_devices_json = json.dumps(ibv_devices)
+            case MlxJacclInstance(
+                ibv_devices=ibv_devices, jaccl_coordinators=jaccl_coordinators
+            ):
+                # Use RDMA connectivity matrix
+                coordination_file = (
+                    f"./hosts_{bound_instance.instance.instance_id}_{rank}.json"
+                )
+                ibv_devices_json = json.dumps(ibv_devices)
 
-            with open(devices_file, "w") as f:
-                _ = f.write(ibv_devices_json)
+                with open(coordination_file, "w") as f:
+                    _ = f.write(ibv_devices_json)
 
-            jaccl_coordinator = jaccl_coordinators[bound_instance.bound_node_id]
+                jaccl_coordinator = jaccl_coordinators[bound_instance.bound_node_id]
 
-            logger.info(f"rank {rank} MLX_IBV_DEVICES: {ibv_devices_json}")
-            logger.info(f"rank {rank} MLX_JACCL_COORDINATOR: {jaccl_coordinator}")
-            os.environ["MLX_IBV_DEVICES"] = devices_file
-            os.environ["MLX_RANK"] = str(rank)
-            os.environ["MLX_JACCL_COORDINATOR"] = jaccl_coordinator
-            group = mx.distributed.init(backend="jaccl", strict=True)
+                logger.info(f"rank {rank} MLX_IBV_DEVICES: {ibv_devices_json}")
+                logger.info(f"rank {rank} MLX_JACCL_COORDINATOR: {jaccl_coordinator}")
+                os.environ["MLX_IBV_DEVICES"] = coordination_file
+                os.environ["MLX_RANK"] = str(rank)
+                os.environ["MLX_JACCL_COORDINATOR"] = jaccl_coordinator
+                group = mx.distributed.init(backend="jaccl", strict=True)
 
-    logger.info(f"Rank {rank} mlx distributed initialization complete")
+        logger.info(f"Rank {rank} mlx distributed initialization complete")
 
-    return group
+        return group
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            if coordination_file:
+                os.remove(coordination_file)
 
 
 def initialize_mlx(
     bound_instance: BoundInstance,
-) -> tuple[Model, TokenizerWrapper, Callable[[mx.array], mx.array]]:
-    """
-    Initialize the MLX model, tokenizer, and sampler. Runs in the MLX thread.
-    """
+) -> Group:
+    # should we unseed it?
+    # TODO: pass in seed from params
     mx.random.seed(42)
 
-    set_wired_limit_for_model(get_weights_size(bound_instance.bound_shard))
+    assert len(bound_instance.instance.shard_assignments.node_to_runner) > 1, (
+        "Tried to initialize mlx for a single node instance"
+    )
+    return mlx_distributed_init(bound_instance)
 
-    sampler: Callable[[mx.array], mx.array] = make_sampler(temp=TEMPERATURE)
-    logger.info("Created a sampler")
 
-    if len(bound_instance.instance.shard_assignments.node_to_runner) <= 1:
+def load_mlx_items(
+    bound_instance: BoundInstance,
+    group: Group | None,
+    on_timeout: TimeoutCallback | None = None,
+) -> tuple[Model, TokenizerWrapper]:
+    if group is None:
         logger.info(f"Single device used for {bound_instance.instance}")
         model_path = build_model_path(bound_instance.bound_shard.model_meta.model_id)
         start_time = time.perf_counter()
         model, _ = load_model(model_path, strict=True)
         end_time = time.perf_counter()
         logger.info(f"Time taken to load model: {(end_time - start_time):.2f}s")
-        if hasattr(model, "model") and isinstance(model.model, DeepseekV3Model):  # type: ignore
-            pass
-            # model, config = quantize_model(
-            #    model, config, group_size=KV_GROUP_SIZE, bits=ATTENTION_KV_BITS, quant_predicate=quant_predicate, mode=QUANTIZE_MODEL_MODE
-            # )
-
         tokenizer = get_tokenizer(model_path, bound_instance.bound_shard)
 
     else:
         logger.info("Starting distributed init")
-        group = mlx_distributed_init(bound_instance)
-
         start_time = time.perf_counter()
-        model, tokenizer = shard_and_load(bound_instance.bound_shard, group=group)
+        model, tokenizer = shard_and_load(
+            bound_instance.bound_shard, group=group, on_timeout=on_timeout
+        )
         end_time = time.perf_counter()
         logger.info(
             f"Time taken to shard and load model: {(end_time - start_time):.2f}s"
@@ -193,14 +255,13 @@ def initialize_mlx(
 
     set_wired_limit_for_model(get_weights_size(bound_instance.bound_shard))
 
-    logger.debug(model)
-
-    return cast(Model, model), tokenizer, sampler
+    return cast(Model, model), tokenizer
 
 
 def shard_and_load(
     shard_metadata: ShardMetadata,
-    group: mx.distributed.Group,
+    group: Group,
+    on_timeout: TimeoutCallback | None = None,
 ) -> tuple[nn.Module, TokenizerWrapper]:
     model_path = build_model_path(shard_metadata.model_meta.model_id)
 
@@ -237,7 +298,15 @@ def shard_and_load(
             logger.info(f"loading model from {model_path} with pipeline parallelism")
             model = pipeline_auto_parallel(model, group, shard_metadata)
 
-    mx.eval(model.parameters())
+    # Estimate timeout based on model size
+    base_timeout = float(os.environ.get("EXO_MODEL_LOAD_TIMEOUT", "60"))
+    model_size_gb = get_weights_size(shard_metadata).in_bytes / (1024**3)
+    timeout_seconds = base_timeout + model_size_gb / 5
+    logger.info(
+        f"Evaluating model parameters with timeout of {timeout_seconds:.0f}s "
+        f"(model size: {model_size_gb:.1f}GB)"
+    )
+    eval_with_timeout(model.parameters(), timeout_seconds, on_timeout)
 
     # TODO: Do we need this?
     mx.eval(model)
@@ -251,26 +320,70 @@ def shard_and_load(
     return model, tokenizer
 
 
-def get_tokenizer(model_path: Path, shard_metadata: ShardMetadata):
-    # TODO: Let's move away from this custom logic to mlx_lm.load()
-    if "kimi-k2" in shard_metadata.model_meta.model_id.lower():
-        eos_token_ids = [163586]
+def get_tokenizer(model_path: Path, shard_metadata: ShardMetadata) -> TokenizerWrapper:
+    """Load tokenizer for a model shard. Delegates to load_tokenizer_for_model_id."""
+    return load_tokenizer_for_model_id(shard_metadata.model_meta.model_id, model_path)
 
-    elif "glm" in shard_metadata.model_meta.model_id.lower():
-        eos_token_ids = [151336, 151329, 151338]
 
-    else:
-        eos_token_ids = None
+def get_eos_token_ids_for_model(model_id: str) -> list[int] | None:
+    """
+    Get the EOS token IDs for a model based on its ID.
 
-    tokenizer = cast(
-        TokenizerWrapper,
-        load_tokenizer(
-            model_path,
-            tokenizer_config_extra={"trust_remote_code": TRUST_REMOTE_CODE},
-            eos_token_ids=eos_token_ids,
-        ),
+    Some models require explicit EOS token configuration that isn't in their
+    tokenizer config. This function returns the known EOS token IDs for such models.
+
+    Args:
+        model_id: The HuggingFace model ID
+
+    Returns:
+        List of EOS token IDs, or None if the model uses standard tokenizer config
+    """
+    model_id_lower = model_id.lower()
+    if "kimi-k2" in model_id_lower:
+        return [163586]
+    elif "glm" in model_id_lower:
+        return [151336, 151329, 151338]
+    return None
+
+
+def load_tokenizer_for_model_id(model_id: str, model_path: Path) -> TokenizerWrapper:
+    """
+    Load tokenizer for a model given its ID and local path.
+
+    This is the core tokenizer loading logic, handling special cases for different
+    model families (Kimi, GLM, etc.) and transformers 5.x compatibility.
+
+    Args:
+        model_id: The HuggingFace model ID (e.g., "moonshotai/Kimi-K2-Instruct")
+        model_path: Local path where the model/tokenizer files are stored
+
+    Returns:
+        TokenizerWrapper instance configured for the model
+    """
+    model_id_lower = model_id.lower()
+    eos_token_ids = get_eos_token_ids_for_model(model_id)
+
+    # Kimi uses a custom TikTokenTokenizer that transformers 5.x can't load via AutoTokenizer
+    if "kimi-k2" in model_id_lower:
+        sys.path.insert(0, str(model_path))
+        from tokenization_kimi import TikTokenTokenizer  # type: ignore[import-not-found]  # noqa: I001
+
+        hf_tokenizer: Any = TikTokenTokenizer.from_pretrained(model_path)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+
+        # Patch encode to use internal tiktoken model directly
+        # transformers 5.x has a bug in the encode->pad path for slow tokenizers
+        def _patched_encode(text: str, **_kwargs: object) -> list[int]:
+            # Pass allowed_special="all" to handle special tokens like <|im_user|>
+            return list(hf_tokenizer.model.encode(text, allowed_special="all"))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+
+        hf_tokenizer.encode = _patched_encode
+        return TokenizerWrapper(hf_tokenizer, eos_token_ids=eos_token_ids)
+
+    tokenizer = load_tokenizer(
+        model_path,
+        tokenizer_config_extra={"trust_remote_code": TRUST_REMOTE_CODE},
+        eos_token_ids=eos_token_ids,
     )
-    assert isinstance(tokenizer, TokenizerWrapper)
 
     return tokenizer
 
@@ -283,25 +396,18 @@ def apply_chat_template(
     messages = chat_task_data.messages
 
     formatted_messages: list[dict[str, Any]] = []
-    for _, message in enumerate(messages):
+    for message in messages:
         # Convert content to appropriate plain Python type
-        content: str | list[dict[str, str]] | None = None
-
         if isinstance(message.content, ChatCompletionMessageText):
-            # Single text object - convert to string
-            content = message.content.text
-        elif isinstance(message.content, list):
-            # List of text objects - convert to list of dicts
-            content = [{"type": "text", "text": item.text} for item in message.content]
-        elif isinstance(message.content, str):
-            # Already a string
-            content = message.content
-        elif message.content is None:
-            # No content
-            content = None
+            message.content = message.content.text
+        if isinstance(message.content, list):
+            if len(message.content) == 0:
+                logger.warning("Received prompt with no content, skipping")
+                continue
+            message.content = "\n".join(c.text for c in message.content).strip()
 
         # Skip messages with no content and no thinking
-        if content is None and message.thinking is None:
+        if message.content is None and message.thinking is None:
             continue
 
         # Build message dict manually with only plain Python types
@@ -311,8 +417,8 @@ def apply_chat_template(
         }
 
         # Add content if present
-        if content is not None:
-            msg_dict["content"] = content
+        if message.content is not None:
+            msg_dict["content"] = message.content
 
         # Add thinking if present
         if message.thinking is not None:
@@ -357,13 +463,16 @@ def apply_chat_template(
         logger.error(f"Messages: {formatted_messages}")
         raise
 
-    prompt: str = tokenizer.apply_chat_template(  # type: ignore
+    prompt: str = tokenizer.apply_chat_template(
         formatted_messages,
         tokenize=False,
         add_generation_prompt=True,
+        tools=chat_task_data.tools,
     )
 
-    return prompt  # type: ignore
+    logger.info(prompt)
+
+    return prompt
 
 
 class NullKVCache(KVCache):
@@ -393,6 +502,11 @@ def make_kv_cache(
     model: Model, max_kv_size: int | None = None, keep: int = 0
 ) -> list[KVCache | RotatingKVCache | QuantizedKVCache]:
     assert hasattr(model, "layers")
+
+    # TODO: Do this for all models
+    if hasattr(model, "make_cache") and isinstance(model, GptOssModel):
+        logger.info("Using MLX LM's make cache")
+        return model.make_cache()  # type: ignore
 
     if max_kv_size is None:
         if KV_CACHE_BITS is None:
@@ -446,12 +560,23 @@ def set_wired_limit_for_model(model_size: Memory):
             "MB. This can be slow. See the documentation for possible work-arounds: "
             "https://github.com/ml-explore/mlx-lm/tree/main#large-models"
         )
+<<<<<<< HEAD
     # Allocate 10% of model size for KV cache to support larger context windows
     kv_bytes = int(0.10 * model_bytes)
     target_cache = int(1.20 * (model_bytes + kv_bytes))
     target_cache = min(target_cache, max_rec_size)
     mx.set_cache_limit(target_cache)
+=======
+>>>>>>> upstream/main
     mx.set_wired_limit(max_rec_size)
-    logger.info(
-        f"Wired limit set to {max_rec_size}. Cache limit set to {target_cache}."
-    )
+    logger.info(f"Wired limit set to {max_rec_size}.")
+
+
+def mlx_cleanup(
+    model: Model | None, tokenizer: TokenizerWrapper | None, group: Group | None
+) -> None:
+    del model, tokenizer, group
+    mx.clear_cache()
+    import gc
+
+    gc.collect()

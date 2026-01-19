@@ -1,41 +1,108 @@
-import socket
-
-from anyio import create_task_group, to_thread
+import anyio
+import httpx
+from anyio import create_task_group
+from loguru import logger
 
 from exo.shared.topology import Topology
 from exo.shared.types.common import NodeId
 
+REACHABILITY_ATTEMPTS = 3
 
-# TODO: ref. api port
+
 async def check_reachability(
-    target_ip: str, target_node_id: NodeId, out: dict[NodeId, set[str]]
+    target_ip: str,
+    expected_node_id: NodeId,
+    out: dict[NodeId, set[str]],
+    client: httpx.AsyncClient,
 ) -> None:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(1)  # 1 second timeout
-    try:
-        result = await to_thread.run_sync(sock.connect_ex, (target_ip, 52415))
-    except socket.gaierror:
-        # seems to throw on ipv6 loopback. oh well
-        # logger.warning(f"invalid {target_ip=}")
+    """Check if a node is reachable at the given IP and verify its identity."""
+    if ":" in target_ip:
+        # TODO: use real IpAddress types
+        target_ip = f"[{target_ip}]"
+    url = f"http://{target_ip}:52415/node_id"
+
+    remote_node_id = None
+    last_error = None
+
+    for _ in range(REACHABILITY_ATTEMPTS):
+        try:
+            r = await client.get(url)
+            if r.status_code != 200:
+                await anyio.sleep(1)
+                continue
+
+            body = r.text.strip().strip('"')
+            if not body:
+                await anyio.sleep(1)
+                continue
+
+            remote_node_id = NodeId(body)
+            break
+
+        # expected failure cases
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+        ):
+            await anyio.sleep(1)
+
+        # other failures should be logged on last attempt
+        except httpx.HTTPError as e:
+            last_error = e
+            await anyio.sleep(1)
+
+    if last_error is not None:
+        logger.warning(
+            f"connect error {type(last_error).__name__} from {target_ip} after {REACHABILITY_ATTEMPTS} attempts; treating as down"
+        )
+
+    if remote_node_id is None:
         return
-    finally:
-        sock.close()
 
-    if result == 0:
-        if target_node_id not in out:
-            out[target_node_id] = set()
-        out[target_node_id].add(target_ip)
+    if remote_node_id != expected_node_id:
+        logger.warning(
+            f"Discovered node with unexpected node_id; "
+            f"ip={target_ip}, expected_node_id={expected_node_id}, "
+            f"remote_node_id={remote_node_id}"
+        )
+        return
+
+    if remote_node_id not in out:
+        out[remote_node_id] = set()
+    out[remote_node_id].add(target_ip)
 
 
-async def check_reachable(topology: Topology) -> dict[NodeId, set[str]]:
+async def check_reachable(
+    topology: Topology, self_node_id: NodeId
+) -> dict[NodeId, set[str]]:
+    """Check which nodes are reachable and return their IPs."""
+
     reachable: dict[NodeId, set[str]] = {}
-    async with create_task_group() as tg:
+
+    # these are intentionally httpx's defaults so we can tune them later
+    timeout = httpx.Timeout(timeout=5.0)
+    limits = httpx.Limits(
+        max_connections=100,
+        max_keepalive_connections=20,
+        keepalive_expiry=5,
+    )
+
+    async with (
+        httpx.AsyncClient(timeout=timeout, limits=limits) as client,
+        create_task_group() as tg,
+    ):
         for node in topology.list_nodes():
             if not node.node_profile:
                 continue
+            if node.node_id == self_node_id:
+                continue
             for iface in node.node_profile.network_interfaces:
                 tg.start_soon(
-                    check_reachability, iface.ip_address, node.node_id, reachable
+                    check_reachability,
+                    iface.ip_address,
+                    node.node_id,
+                    reachable,
+                    client,
                 )
 
     return reachable

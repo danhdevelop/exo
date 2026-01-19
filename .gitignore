@@ -12,6 +12,8 @@ htmlcov/
 # nix
 .direnv/
 
+# IDEA (PyCharm)
+.idea
 
 # xcode / macos
 *.xcuserstate
@@ -19,6 +21,7 @@ htmlcov/
 *.xcuserdatad/
 **/.DS_Store
 app/EXO/build/
+dist/
 
 
 # rust

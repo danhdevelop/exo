@@ -8,7 +8,7 @@
 exo: Run your own AI cluster at home with everyday devices. Maintained by [exo labs](https://x.com/exolabs).
 
 <p align="center">
-  <a href="https://discord.gg/72NsF6ux" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/TJ4P57arEm" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://x.com/exolabs" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/twitter/follow/exolabs?style=social" alt="X"></a>
   <a href="https://www.apache.org/licenses/LICENSE-2.0.html" target="_blank" rel="noopener noreferrer"><img src="https://img.shields.io/badge/License-Apache2.0-blue.svg" alt="License: Apache-2.0"></a>
 </p>
@@ -26,6 +26,15 @@ exo connects all your devices into an AI cluster. Not only does exo enable runni
 - **Topology-Aware Auto Parallel**: exo figures out the best way to split your model across all available devices based on a realtime view of your device topology. It takes into account device resources and network latency/bandwidth between each link.
 - **Tensor Parallelism**: exo supports sharding models, for up to 1.8x speedup on 2 devices and 3.2x speedup on 4 devices.
 - **MLX Support**: exo uses [MLX](https://github.com/ml-explore/mlx) as an inference backend and [MLX distributed](https://ml-explore.github.io/mlx/build/html/usage/distributed.html) for distributed communication.
+
+## Dashboard
+
+exo includes a built-in dashboard for managing your cluster and chatting with models.
+
+<p align="center">
+  <img src="docs/imgs/dashboard-cluster-view.png" alt="exo dashboard - cluster view showing 4 x M3 Ultra Mac Studio with DeepSeek v3.1 and Kimi-K2-Thinking loaded" width="80%" />
+</p>
+<p align="center"><em>4 × 512GB M3 Ultra Mac Studio running DeepSeek v3.1 (8-bit) and Kimi-K2-Thinking (4-bit)</em></p>
 
 ## Benchmarks
 
@@ -61,10 +70,10 @@ Devices running exo automatically discover each other, without needing any manua
 
 There are two ways to run exo:
 
-### Run from Source (Mac & Linux)
+### Run from Source (macOS)
 
 **Prerequisites:**
-- [brew](https://github.com/Homebrew/brew) (for simple package management on MacOS)
+- [brew](https://github.com/Homebrew/brew) (for simple package management on macOS)
 
   ```bash
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -105,6 +114,62 @@ uv run exo
 
 This starts the exo dashboard and API at http://localhost:52415/
 
+### Run from Source (Linux)
+
+**Prerequisites:**
+
+- [uv](https://github.com/astral-sh/uv) (for Python dependency management)
+- [node](https://github.com/nodejs/node) (for building the dashboard) - version 18 or higher
+- [rust](https://github.com/rust-lang/rustup) (to build Rust bindings, nightly for now)
+
+**Installation methods:**
+
+**Option 1: Using system package manager (Ubuntu/Debian example):**
+```bash
+# Install Node.js and npm
+sudo apt update
+sudo apt install nodejs npm
+
+# Install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install Rust (using rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup toolchain install nightly
+```
+
+**Option 2: Using Homebrew on Linux (if preferred):**
+```bash
+# Install Homebrew on Linux
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install dependencies
+brew install uv node
+
+# Install Rust (using rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup toolchain install nightly
+```
+
+**Note:** The `macmon` package is macOS-only and not required for Linux.
+
+Clone the repo, build the dashboard, and run exo:
+
+```bash
+# Clone exo
+git clone https://github.com/exo-explore/exo
+
+# Build dashboard
+cd exo/dashboard && npm install && npm run build && cd ..
+
+# Run exo
+uv run exo
+```
+
+This starts the exo dashboard and API at http://localhost:52415/
+
+**Important note for Linux users:** Currently, exo runs on CPU on Linux. GPU support for Linux platforms is under development. If you'd like to see support for your specific Linux hardware, please [search for existing feature requests](https://github.com/exo-explore/exo/issues) or create a new one.
+
 ### macOS App
 
 exo ships a macOS app that runs in the background on your Mac.
@@ -116,6 +181,47 @@ The macOS app requires macOS Tahoe 26.2 or later.
 Download the latest build here: [EXO-latest.dmg](https://assets.exolabs.net/EXO-latest.dmg).
 
 The app will ask for permission to modify system settings and install a new Network profile. Improvements to this are being worked on.
+
+#### Uninstalling the macOS App
+
+The recommended way to uninstall is through the app itself: click the menu bar icon → Advanced → Uninstall. This cleanly removes all system components.
+
+If you've already deleted the app, you can run the standalone uninstaller script:
+
+```bash
+sudo ./app/EXO/uninstall-exo.sh
+```
+
+This removes:
+- Network setup LaunchDaemon
+- Network configuration script
+- Log files
+- The "exo" network location
+
+**Note:** You'll need to manually remove EXO from Login Items in System Settings → General → Login Items.
+
+---
+
+### Enabling RDMA on macOS
+
+RDMA is a new capability added to macOS 26.2. It works on any Mac with Thunderbolt 5 (M4 Pro Mac Mini, M4 Max Mac Studio, M4 Max MacBook Pro, M3 Ultra Mac Studio).
+
+Note that on Mac Studio, you cannot use the Thunderbolt 5 port next to the Ethernet port.
+
+To enable RDMA on macOS, follow these steps:
+
+1. Shut down your Mac.
+2. Hold down the power button for 10 seconds until the boot menu appears.
+3. Select "Options" to enter Recovery mode.
+4. When the Recovery UI appears, open the Terminal from the Utilities menu.
+5. In the Terminal, type:
+   ```
+   rdma_ctl enable
+   ```
+   and press Enter.
+6. Reboot your Mac.
+
+After that, RDMA will be enabled in macOS and exo will take care of the rest.
 
 ---
 
@@ -215,7 +321,10 @@ curl -X DELETE http://localhost:52415/instance/YOUR_INSTANCE_ID
 - List all models: `curl http://localhost:52415/models`
 - Inspect instance IDs and deployment state: `curl http://localhost:52415/state`
 
-For further details, see API types and endpoints in [src/exo/master/api.py](src/exo/master/api.py).
+For further details, see:
+
+- API basic documentation in [docs/api.md](docs/api.md).
+- API types and endpoints in [src/exo/master/api.py](src/exo/master/api.py).
 
 ---
 
