@@ -273,23 +273,66 @@ def parse_gpt_oss(
     encoding = get_gpt_oss_encoding()
     stream = StreamableParser(encoding, role=Role.ASSISTANT)
     thinking = False
+    parser_active = False
+    use_passthrough = False
+    token_count = 0
+    first_error_logged = False
 
     for response in responses:
-        stream.process(response.token)
+        token_count += 1
 
-        delta = stream.last_content_delta
-        ch = stream.current_channel
+        # If we've switched to passthrough mode, just yield tokens directly
+        if use_passthrough:
+            yield response
+            if response.finish_reason is not None:
+                break
+            continue
 
-        if ch == "analysis" and not thinking:
-            thinking = True
-            yield response.model_copy(update={"text": "<think>"})
+        try:
+            stream.process(response.token)
+            parser_active = True
 
-        if ch != "analysis" and thinking:
-            thinking = False
-            yield response.model_copy(update={"text": "</think>"})
+            delta = stream.last_content_delta
+            ch = stream.current_channel
 
-        if delta:
-            yield response.model_copy(update={"text": delta})
+            if ch == "analysis" and not thinking:
+                thinking = True
+                yield response.model_copy(update={"text": "<think>"})
+
+            if ch != "analysis" and thinking:
+                thinking = False
+                yield response.model_copy(update={"text": "</think>"})
+
+            if delta:
+                yield response.model_copy(update={"text": delta})
+
+        except Exception as e:
+            # If parser fails on first few tokens, the model isn't using Harmony format
+            # This happens when the chat template doesn't produce proper Harmony format prompt
+            if not parser_active and token_count <= 3:
+                if not first_error_logged:
+                    logger.warning(
+                        f"GPT-OSS parser failed on token {token_count}: {e}. "
+                        f"Model is not generating in Harmony format. "
+                        f"Falling back to passthrough mode. "
+                        f"This usually means the chat template didn't include Harmony format tokens."
+                    )
+                    first_error_logged = True
+                use_passthrough = True
+                yield response
+            elif parser_active:
+                # If parser was active and then failed, this is a real error
+                logger.error(f"GPT-OSS parser failed after {token_count} tokens: {e}")
+                raise
+            else:
+                # Parser never activated, keep trying for a few more tokens
+                if token_count > 10:
+                    logger.warning(
+                        f"GPT-OSS parser hasn't activated after {token_count} tokens. "
+                        f"Switching to passthrough mode. Error: {e}"
+                    )
+                    use_passthrough = True
+                yield response
 
         if response.finish_reason is not None:
             if thinking:

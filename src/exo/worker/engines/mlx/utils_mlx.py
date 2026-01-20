@@ -343,6 +343,10 @@ def get_eos_token_ids_for_model(model_id: str) -> list[int] | None:
         return [163586]
     elif "glm" in model_id_lower:
         return [151336, 151329, 151338]
+    elif "gpt-oss" in model_id_lower or "gpt_oss" in model_id_lower:
+        # GPT-OSS uses <|return|> token (200002) as EOS
+        # Also include <|endoftext|> (199999) as fallback
+        return [200002, 199999]
     return None
 
 
@@ -351,7 +355,7 @@ def load_tokenizer_for_model_id(model_id: str, model_path: Path) -> TokenizerWra
     Load tokenizer for a model given its ID and local path.
 
     This is the core tokenizer loading logic, handling special cases for different
-    model families (Kimi, GLM, etc.) and transformers 5.x compatibility.
+    model families (Kimi, GLM, GPT-OSS, etc.) and transformers 5.x compatibility.
 
     Args:
         model_id: The HuggingFace model ID (e.g., "moonshotai/Kimi-K2-Instruct")
@@ -379,6 +383,27 @@ def load_tokenizer_for_model_id(model_id: str, model_path: Path) -> TokenizerWra
         hf_tokenizer.encode = _patched_encode
         return TokenizerWrapper(hf_tokenizer, eos_token_ids=eos_token_ids)
 
+    # GPT-OSS uses o200k_harmony tokenizer with special Harmony format
+    if "gpt-oss" in model_id_lower or "gpt_oss" in model_id_lower:
+        logger.info(f"Loading GPT-OSS tokenizer for {model_id}")
+        tokenizer = load_tokenizer(
+            model_path,
+            tokenizer_config_extra={"trust_remote_code": TRUST_REMOTE_CODE},
+            eos_token_ids=eos_token_ids,
+        )
+
+        # Verify chat template is loaded
+        if hasattr(tokenizer, '_tokenizer') and hasattr(tokenizer._tokenizer, 'chat_template'):
+            if tokenizer._tokenizer.chat_template is None:  # pyright: ignore[reportUnknownMemberType]
+                logger.warning(f"GPT-OSS tokenizer loaded but chat_template is None! Model may not generate in Harmony format.")
+            else:
+                logger.info("GPT-OSS chat template loaded successfully")
+                # Log a sample of the template for debugging
+                template_preview = str(tokenizer._tokenizer.chat_template)[:200]  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                logger.debug(f"Chat template preview: {template_preview}...")
+
+        return tokenizer
+
     tokenizer = load_tokenizer(
         model_path,
         tokenizer_config_extra={"trust_remote_code": TRUST_REMOTE_CODE},
@@ -394,6 +419,8 @@ def apply_chat_template(
 ) -> str:
     # Now we can properly access the messages
     messages = chat_task_data.messages
+    model_id = chat_task_data.model.lower()
+    is_gpt_oss = "gpt-oss" in model_id or "gpt_oss" in model_id
 
     formatted_messages: list[dict[str, Any]] = []
     for message in messages:
@@ -420,7 +447,7 @@ def apply_chat_template(
         if message.content is not None:
             msg_dict["content"] = message.content
 
-        # Add thinking if present
+        # Add thinking if present (GPT-OSS specific)
         if message.thinking is not None:
             msg_dict["thinking"] = message.thinking
 
@@ -430,9 +457,9 @@ def apply_chat_template(
 
         if message.tool_calls is not None:
             # Convert tool_calls to plain Python types (in case they're Pydantic models)
-            if isinstance(message.tool_calls, list):
+            if isinstance(message.tool_calls, list):  # pyright: ignore[reportUnnecessaryIsInstance]
                 msg_dict["tool_calls"] = [
-                    tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc
+                    tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
                     for tc in message.tool_calls
                 ]
             else:
@@ -444,7 +471,7 @@ def apply_chat_template(
         if message.function_call is not None:
             # Convert function_call to plain Python types (in case it's a Pydantic model)
             if hasattr(message.function_call, 'model_dump'):
-                msg_dict["function_call"] = message.function_call.model_dump(mode='python')
+                msg_dict["function_call"] = message.function_call.model_dump(mode='python')  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             else:
                 msg_dict["function_call"] = message.function_call
 
@@ -463,14 +490,100 @@ def apply_chat_template(
         logger.error(f"Messages: {formatted_messages}")
         raise
 
-    prompt: str = tokenizer.apply_chat_template(
-        formatted_messages,
-        tokenize=False,
-        add_generation_prompt=True,
-        tools=chat_task_data.tools,
-    )
+    # Prepare template kwargs - GPT-OSS specific parameters
+    template_kwargs: dict[str, Any] = {
+        "tokenize": False,
+        "add_generation_prompt": True,
+    }
 
-    logger.info(prompt)
+    # Add tools if present
+    if chat_task_data.tools is not None:
+        template_kwargs["tools"] = chat_task_data.tools
+
+    # GPT-OSS specific parameters from tokenizer_config.json
+    if is_gpt_oss:
+        logger.info("Applying GPT-OSS specific chat template parameters")
+        # reasoning_effort: "low", "medium", "high" - affects thinking depth
+        # We can infer this from temperature or use default "medium"
+        if hasattr(chat_task_data, 'temperature') and chat_task_data.temperature is not None:
+            if chat_task_data.temperature < 0.3:
+                template_kwargs["reasoning_effort"] = "low"
+            elif chat_task_data.temperature > 0.7:
+                template_kwargs["reasoning_effort"] = "high"
+            else:
+                template_kwargs["reasoning_effort"] = "medium"
+
+        # builtin_tools: can include "browser" and "python"
+        # Only enable if tools are present
+        if chat_task_data.tools:
+            template_kwargs["builtin_tools"] = []  # Start empty, model will use custom tools
+
+    try:
+        prompt: str = tokenizer.apply_chat_template(  # pyright: ignore[reportAny]
+            formatted_messages,
+            **template_kwargs
+        )
+    except Exception as e:
+        logger.error(f"Failed to apply chat template: {e}")
+        logger.error(f"Model: {chat_task_data.model}")
+        logger.error(f"Messages: {formatted_messages}")
+        logger.error(f"Template kwargs: {template_kwargs}")
+
+        # Try progressively simpler parameters
+        if chat_task_data.tools is not None:
+            logger.warning("Retrying without tools parameter...")
+            template_kwargs.pop("tools", None)
+            template_kwargs.pop("builtin_tools", None)
+            try:
+                prompt = tokenizer.apply_chat_template(  # pyright: ignore[reportAny]
+                    formatted_messages,
+                    **template_kwargs
+                )
+            except Exception as e2:
+                logger.error(f"Retry without tools failed: {e2}")
+                # Last resort: minimal parameters
+                logger.warning("Retrying with minimal parameters...")
+                try:
+                    prompt = tokenizer.apply_chat_template(
+                        formatted_messages,
+                        tokenize=False,
+                        add_generation_prompt=True,
+                    )
+                except Exception as e3:
+                    logger.error(f"All retries failed: {e3}")
+                    raise Exception(
+                        f"Chat template failed: {str(e)}. "
+                        f"Message format may be incompatible with this model. "
+                        f"Original error: {str(e)}"
+                    ) from e
+        else:
+            raise Exception(
+                f"Chat template failed: {str(e)}. "
+                f"Message format may be incompatible with this model."
+            ) from e
+
+    # Log the prompt for debugging (especially important for GPT-OSS)
+    if is_gpt_oss:
+        logger.info("="*80)
+        logger.info("GPT-OSS Harmony Format Prompt:")
+        logger.info("="*80)
+        # Check if prompt contains Harmony format tokens
+        if "<|start|>" in prompt:
+            logger.info("✓ Prompt contains <|start|> token (Harmony format detected)")
+        else:
+            logger.warning("✗ Prompt does NOT contain <|start|> token - model may not generate in Harmony format!")
+
+        if "<|channel|>" in prompt:
+            logger.info("✓ Prompt contains <|channel|> token")
+        else:
+            logger.warning("✗ Prompt does NOT contain <|channel|> token")
+
+        # Log the actual prompt
+        logger.info(prompt)
+        logger.info("="*80)
+    else:
+        logger.info(f"Chat template applied successfully for {chat_task_data.model}")
+        logger.debug(f"Prompt: {prompt}")
 
     return prompt
 

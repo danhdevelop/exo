@@ -19,7 +19,7 @@ from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
 from exo.worker.engines.mlx import Model
-from exo.worker.engines.mlx.constants import KV_BITS, KV_GROUP_SIZE, MAX_TOKENS
+from exo.worker.engines.mlx.constants import MAX_TOKENS
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
     make_kv_cache,
@@ -28,21 +28,6 @@ from exo.worker.engines.mlx.utils_mlx import (
 from exo.worker.runner.bootstrap import logger
 
 generation_stream = mx.new_stream(mx.default_device())
-
-
-def maybe_quantize_kv_cache(
-    prompt_cache: list[KVCache | Any],
-    quantized_kv_start: int,
-    kv_group_size: int,
-    kv_bits: int | None,
-) -> None:
-    if kv_bits is None:
-        return
-    for e, c in enumerate(prompt_cache):
-        if (
-            hasattr(c, "to_quantized") and c.offset >= quantized_kv_start  # type: ignore
-        ):
-            prompt_cache[e] = c.to_quantized(group_size=kv_group_size, bits=kv_bits)
 
 
 def warmup_inference(
@@ -81,8 +66,8 @@ def warmup_inference(
         sampler=sampler,
         prompt_cache=cache,
         prefill_step_size=512,  # Small steps to avoid GPU timeout
-        kv_group_size=KV_GROUP_SIZE,
-        kv_bits=KV_BITS,
+        kv_group_size=None,  # Cache already configured by make_kv_cache
+        kv_bits=None,  # Cache already configured by make_kv_cache
     ):
         logger.info("Generated warmup token: " + str(_r.text))
         tokens_generated += 1
@@ -163,8 +148,8 @@ def mlx_generate(
         logits_processors=logits_processors,
         prompt_cache=caches,
         prefill_step_size=512,
-        kv_group_size=KV_GROUP_SIZE,
-        kv_bits=KV_BITS,
+        kv_group_size=None,  # Cache already configured by make_kv_cache
+        kv_bits=None,  # Cache already configured by make_kv_cache
     ):
         logger.info(out.text)
 

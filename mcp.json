@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "example-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-example"
+      ],
+      "enabled": false,
+      "description": "Example MCP server (disabled by default)"
+    }
+  }
+}
