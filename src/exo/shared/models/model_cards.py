@@ -18,6 +18,21 @@ class ModelCard(CamelCaseModel):
 
 MODEL_CARDS: dict[str, ModelCard] = {
     # deepseek v3
+    "deepseek-coder-v2-lite-instruct-mlx-6bit": ModelCard(
+        short_id="deepseek-coder-v2-lite-instruct-mlx-6bit",
+        model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-6bit"),
+        name="DeepSeek Coder (6-bit)",
+        description="""DeepSeek Coder is a large language model trained on the DeepSeek Coder dataset.""",
+        tags=[],
+        metadata=ModelMetadata(
+            model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-6bit"),
+            pretty_name="DeepSeek Coder (6-bit)",
+            storage_size=Memory.from_gb(12.8),
+            n_layers=27,
+            hidden_size=2048,
+            supports_tensor=False,
+        ),
+    ),
     "deepseek-v3.1-4bit": ModelCard(
         short_id="deepseek-v3.1-4bit",
         model_id=ModelId("mlx-community/DeepSeek-V3.1-4bit"),
@@ -263,31 +278,31 @@ MODEL_CARDS: dict[str, ModelCard] = {
             supports_tensor=False,
         ),
     ),
-    "qwen3-30b": ModelCard(
-        short_id="qwen3-30b",
-        model_id=ModelId("mlx-community/Qwen3-30B-A3B-4bit"),
-        name="Qwen3 30B A3B (4-bit)",
-        description="""Qwen3 30B is a large language model trained on the Qwen3 30B dataset.""",
+    "qwen3-coder-30b-4bit": ModelCard(
+        short_id="qwen3-coder-30b-4bit",
+        model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit"),
+        name="Qwen3 Coder 30B A3B (4-bit)",
+        description="""Qwen3 Coder 30B is a large language model trained on the Qwen3 Coder 30B dataset.""",
         tags=[],
         metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/Qwen3-30B-A3B-4bit"),
-            pretty_name="Qwen3 30B A3B (4-bit)",
-            storage_size=Memory.from_mb(16797),
+            model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit"),
+            pretty_name="Qwen3 Coder 30B A3B (4-bit)",
+            storage_size=Memory.from_gb(17.2),
             n_layers=48,
             hidden_size=2048,
             supports_tensor=True,
         ),
     ),
-    "qwen3-30b-8bit": ModelCard(
-        short_id="qwen3-30b-8bit",
-        model_id=ModelId("mlx-community/Qwen3-30B-A3B-8bit"),
-        name="Qwen3 30B A3B (8-bit)",
-        description="""Qwen3 30B is a large language model trained on the Qwen3 30B dataset.""",
+    "qwen3-coder-30b-6bit": ModelCard(
+        short_id="qwen3-coder-30b-6bit",
+        model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit"),
+        name="Qwen3 Coder 30B A3B (6-bit)",
+        description="""Qwen3 Coder 30B is a large language model trained on the Qwen3 Coder 30B dataset.""",
         tags=[],
         metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/Qwen3-30B-A3B-8bit"),
-            pretty_name="Qwen3 30B A3B (8-bit)",
-            storage_size=Memory.from_mb(31738),
+            model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit"),
+            pretty_name="Qwen3 Coder 30B A3B (6-bit)",
+            storage_size=Memory.from_gb(17.8),
             n_layers=48,
             hidden_size=2048,
             supports_tensor=True,

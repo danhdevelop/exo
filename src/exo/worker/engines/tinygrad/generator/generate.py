@@ -9,7 +9,7 @@ from tinygrad import Tensor, Device
 from exo.shared.types.api import ChatCompletionMessage, FinishReason
 from exo.shared.types.tasks import ChatCompletionTaskParams
 from exo.shared.types.worker.runner_response import GenerationResponse
-from exo.worker.engines.tinygrad.constants import TEMPERATURE, TOP_P, MAX_TOKENS
+from exo.worker.engines.tinygrad.constants import TEMPERATURE, TOP_P, MAX_TOKENS, TOP_K, ALPHA_F, ALPHA_P
 from exo.worker.engines.tinygrad.models.llama import sample_logits
 from exo.worker.engines.tinygrad.stateful_model import make_prompt_state
 from exo.worker.engines.tinygrad.utils_tinygrad import get_tinygrad_executor
@@ -149,8 +149,12 @@ def tinygrad_generate(
     # Create initial state on CPU - let TinyGrad handle device transfer
     x = Tensor(np.array([tokens]))
     state = make_prompt_state(x, model)
-
     max_tokens = task.max_tokens or MAX_TOKENS
+    temperature = task.temperature if task.temperature is not None else TEMPERATURE
+    top_k = task.top_k if task.top_k is not None else TOP_K
+    top_p = task.top_p if task.top_p is not None else TOP_P
+    frequency_penalty = task.frequency_penalty if task.frequency_penalty is not None else ALPHA_F
+    presence_penalty = task.presence_penalty if task.presence_penalty is not None else ALPHA_P
     tokens_generated = 0
 
     # Generate tokens
@@ -168,11 +172,11 @@ def tinygrad_generate(
         logits = out[:, -1, :]
         next_token = sample_logits(
             logits.flatten(),
-            TEMPERATURE,
-            0,
-            0.8,
-            TOP_P,
-            0.0
+            temperature,
+            top_k,
+            top_p,
+            frequency_penalty,
+            presence_penalty
         )
         next_token_id = int(next_token.realize().numpy())
 

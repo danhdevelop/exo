@@ -457,11 +457,28 @@ def apply_chat_template(
 
         if message.tool_calls is not None:
             # Convert tool_calls to plain Python types (in case they're Pydantic models)
+            import json
+            tool_calls_list = []
             if isinstance(message.tool_calls, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-                msg_dict["tool_calls"] = [
-                    tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-                    for tc in message.tool_calls
-                ]
+                for tc in message.tool_calls:
+                    tc_dict = tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+
+                    # Qwen3-Coder template expects arguments as dict, not JSON string
+                    # Convert OpenAI format (string) to Qwen format (dict)
+                    if isinstance(tc_dict, dict) and "function" in tc_dict:
+                        func = tc_dict["function"]
+                        if isinstance(func, dict) and "arguments" in func:
+                            args = func["arguments"]
+                            # If arguments is a JSON string, parse it to dict
+                            if isinstance(args, str):
+                                try:
+                                    func["arguments"] = json.loads(args)
+                                except (json.JSONDecodeError, TypeError):
+                                    logger.warning(f"Failed to parse tool_call arguments as JSON: {args}")
+                                    func["arguments"] = {}
+
+                    tool_calls_list.append(tc_dict)
+                msg_dict["tool_calls"] = tool_calls_list
             else:
                 msg_dict["tool_calls"] = message.tool_calls
 
@@ -470,10 +487,23 @@ def apply_chat_template(
 
         if message.function_call is not None:
             # Convert function_call to plain Python types (in case it's a Pydantic model)
+            import json
             if hasattr(message.function_call, 'model_dump'):
-                msg_dict["function_call"] = message.function_call.model_dump(mode='python')  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+                func_call_dict = message.function_call.model_dump(mode='python')  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             else:
-                msg_dict["function_call"] = message.function_call
+                func_call_dict = message.function_call
+
+            # Qwen3-Coder template expects arguments as dict, not JSON string
+            if isinstance(func_call_dict, dict) and "arguments" in func_call_dict:
+                args = func_call_dict["arguments"]
+                if isinstance(args, str):
+                    try:
+                        func_call_dict["arguments"] = json.loads(args)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"Failed to parse function_call arguments as JSON: {args}")
+                        func_call_dict["arguments"] = {}
+
+            msg_dict["function_call"] = func_call_dict
 
         formatted_messages.append(msg_dict)
 
@@ -496,9 +526,55 @@ def apply_chat_template(
         "add_generation_prompt": True,
     }
 
-    # Add tools if present
+    # Add tools if present - convert to plain Python types
     if chat_task_data.tools is not None:
-        template_kwargs["tools"] = chat_task_data.tools
+        # Convert tools to plain Python dicts to avoid Pydantic model issues in Jinja2
+        # Use JSON round-trip to ensure all nested objects are plain Python types
+        import json
+        try:
+            tools_json = json.dumps(
+                chat_task_data.tools,
+                default=lambda o: o.model_dump(mode='python') if hasattr(o, 'model_dump') else str(o)  # pyright: ignore[reportAny]
+            )
+            tools_data = json.loads(tools_json)  # pyright: ignore[reportAny]
+
+            # Clean tools for Qwen3-Coder template compatibility
+            for tool in tools_data:  # pyright: ignore[reportAny]
+                if isinstance(tool, dict) and "function" in tool:
+                    func = tool["function"]  # pyright: ignore[reportUnknownVariableType]
+                    if "parameters" in func and isinstance(func["parameters"], dict):  # pyright: ignore[reportUnknownArgumentType]
+                        params = func["parameters"]  # pyright: ignore[reportUnknownVariableType]
+
+                        # Ensure properties is a dict
+                        if "properties" in params:  # pyright: ignore[reportUnknownArgumentType]
+                            if isinstance(params["properties"], list):  # pyright: ignore[reportUnknownArgumentType]
+                                props_dict = {}
+                                for prop in params["properties"]:  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
+                                    if isinstance(prop, dict) and len(prop) == 1:
+                                        props_dict.update(prop)  # pyright: ignore[reportUnknownArgumentType]
+                                params["properties"] = props_dict  # pyright: ignore[reportUnknownArgumentType]
+                            elif not isinstance(params["properties"], dict):  # pyright: ignore[reportUnknownArgumentType]
+                                logger.warning(f"Tool properties is not a dict: {type(params['properties'])}")  # pyright: ignore[reportUnknownArgumentType]
+                                params["properties"] = {}  # pyright: ignore[reportUnknownArgumentType]
+
+                            # Clean each property - remove additionalProperties that confuse Qwen template
+                            for prop_name, prop_spec in params["properties"].items():  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportUnknownArgumentType]
+                                # Remove additionalProperties from individual properties
+                                # Qwen template iterates over properties and gets confused by this field
+                                if isinstance(prop_spec, dict) and "additionalProperties" in prop_spec:
+                                    logger.debug(f"Removing additionalProperties from {func['name']}.{prop_name}")  # pyright: ignore[reportUnknownArgumentType]
+                                    del prop_spec["additionalProperties"]
+
+                        # Remove top-level additionalProperties from parameters if present
+                        if "additionalProperties" in params:  # pyright: ignore[reportUnknownArgumentType]
+                            logger.debug(f"Removing top-level additionalProperties from {func['name']}")  # pyright: ignore[reportUnknownArgumentType]
+                            del params["additionalProperties"]  # pyright: ignore[reportUnknownArgumentType]
+
+            template_kwargs["tools"] = tools_data
+            logger.debug("Cleaned tools for Qwen template")
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Failed to convert tools to plain Python types: {e}, passing as-is")
+            template_kwargs["tools"] = chat_task_data.tools
 
     # GPT-OSS specific parameters from tokenizer_config.json
     if is_gpt_oss:
@@ -526,8 +602,30 @@ def apply_chat_template(
     except Exception as e:
         logger.error(f"Failed to apply chat template: {e}")
         logger.error(f"Model: {chat_task_data.model}")
-        logger.error(f"Messages: {formatted_messages}")
-        logger.error(f"Template kwargs: {template_kwargs}")
+
+        # Log messages in detail to debug format issues
+        import json
+        try:
+            logger.error(f"Messages (formatted): {json.dumps(formatted_messages, indent=2)}")
+        except Exception:
+            logger.error(f"Messages (cannot serialize): {formatted_messages}")
+
+        # Log tools in detail to debug format issues
+        if "tools" in template_kwargs:
+            logger.error(f"Tools (formatted): {json.dumps(template_kwargs['tools'], indent=2)}")
+        logger.error(f"Template kwargs keys: {template_kwargs.keys()}")
+
+        # Check for non-dict objects in messages
+        for i, msg in enumerate(formatted_messages):
+            if not isinstance(msg, dict):
+                logger.error(f"Message {i} is not a dict: {type(msg)} = {msg}")
+            elif "content" in msg and msg["content"] is not None:
+                if isinstance(msg["content"], list):
+                    for j, content_item in enumerate(msg["content"]):
+                        if not isinstance(content_item, dict):
+                            logger.error(f"Message {i}, content[{j}] is not a dict: {type(content_item)}")
+                elif not isinstance(msg["content"], str):
+                    logger.error(f"Message {i}, content is neither string nor list: {type(msg['content'])}")
 
         # Try progressively simpler parameters
         if chat_task_data.tools is not None:

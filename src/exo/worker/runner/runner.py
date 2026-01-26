@@ -1,12 +1,14 @@
-import asyncio
-import inspect
-import os
+import json
+import re
 import time
 from collections.abc import Generator
 from functools import cache
+from typing import Any
 
 import mlx.core as mx
 from mlx_lm.models.gpt_oss import Model as GptOssModel
+from mlx_lm.models.qwen3_moe import Model as Qwen3MoeModel
+from mlx_lm.models.qwen3_next import Model as Qwen3NextModel
 from openai_harmony import (  # pyright: ignore[reportMissingTypeStubs]
     HarmonyEncodingName,
     Role,
@@ -50,12 +52,11 @@ from exo.shared.types.worker.runners import (
     RunnerStatus,
     RunnerWarmingUp,
 )
-from exo.utils.channels import ClosedResourceError, MpReceiver, MpSender
+from exo.utils.channels import MpReceiver, MpSender
 from exo.worker.engines.mlx.generator.generate import mlx_generate, warmup_inference
 from exo.worker.engines.mlx.utils_mlx import (
     initialize_mlx,
     load_mlx_items,
-    mlx_force_oom,
 )
 from exo.worker.runner.bootstrap import logger
 
@@ -190,10 +191,18 @@ def main(
                         )
 
                         # GPT-OSS specific parsing to match other model formats.
+                        # GPT-OSS specific parsing to match other model formats.
                         if isinstance(model, GptOssModel):
                             mlx_generator = parse_gpt_oss(mlx_generator)
+                        # Qwen thinking models parsing
+                        elif isinstance(model, (Qwen3NextModel, Qwen3MoeModel)):
+                            # Check if it's a thinking model (model name contains "thinking")
+                            # For now, apply parse_qwen_thinking
+                            mlx_generator = parse_qwen_thinking(mlx_generator)
 
-                        # TODO: Add tool call parser here
+                        # Apply tool call parser for Qwen models
+                        if isinstance(model, (Qwen3NextModel, Qwen3MoeModel)):
+                            mlx_generator = parse_qwen_tool_calls(mlx_generator)
 
                         for response in mlx_generator:
                             match response:
@@ -209,6 +218,7 @@ def main(
                                                     token_id=response.token,
                                                     finish_reason=response.finish_reason,
                                                     stats=response.stats,
+                                                    tool_calls=response.tool_calls,
                                                 ),
                                             )
                                         )
@@ -341,6 +351,160 @@ def parse_gpt_oss(
             break
 
 
+def parse_qwen_thinking(
+    responses: Generator[GenerationResponse],
+) -> Generator[GenerationResponse]:
+    """
+    Parser for Qwen thinking models.
+    Currently a pass-through - needs implementation for thinking token detection.
+    """
+    # TODO: Implement thinking token detection for Qwen models
+    # Qwen thinking models use special tokens <think> and </think>
+    # Need to detect these tokens and emit appropriate thinking markers
+    for response in responses:
+        yield response
+
+
+def parse_qwen_tool_calls(
+    responses: Generator[GenerationResponse],
+) -> Generator[GenerationResponse]:
+    """
+    Parser for Qwen tool calls in XML format.
+
+    Supports two formats:
+    1. JSON-in-XML (Qwen2.5/Qwen3-Instruct):
+       <tool_call>
+       {"name": "function_name", "arguments": {"arg1": "value1"}}
+       </tool_call>
+
+    2. Pure XML (Qwen3-Coder):
+       <tool_call>
+       <function=calculator>
+       <parameter=operation>multiply</parameter>
+       <parameter=a>5</parameter>
+       </function>
+       </tool_call>
+
+    This parser detects these XML tags, extracts the tool call information,
+    and converts to OpenAI-compatible format.
+    """
+    accumulated_text = ""
+    tool_calls: list[dict[str, Any]] = []
+    tool_call_buffer = ""
+    in_tool_call = False
+    tool_call_index = 0
+
+    # Pattern to match tool call XML tags
+    tool_call_start_pattern = re.compile(r"<tool_call>")
+    tool_call_end_pattern = re.compile(r"</tool_call>")
+
+    for response in responses:
+        accumulated_text += response.text
+        current_text = response.text
+        visible_text = current_text
+
+        # Check if we're entering a tool call
+        if tool_call_start_pattern.search(current_text):
+            in_tool_call = True
+            # Remove the opening tag from the visible text
+            visible_text = tool_call_start_pattern.sub("", visible_text)
+
+        if in_tool_call:
+            tool_call_buffer += current_text
+
+            # Check if we're exiting a tool call
+            if tool_call_end_pattern.search(tool_call_buffer):
+                # Remove the opening and closing tags
+                content = tool_call_start_pattern.sub("", tool_call_buffer)
+                content = tool_call_end_pattern.sub("", content).strip()
+
+                tool_call = None
+
+                # Try parsing as JSON first (Qwen2.5/Qwen3-Instruct format)
+                try:
+                    tool_call_data = json.loads(content)
+
+                    # Format as OpenAI-compatible tool call
+                    tool_call = {
+                        "id": f"call_{tool_call_index}",
+                        "type": "function",
+                        "function": {
+                            "name": str(tool_call_data.get("name", "")),  # pyright: ignore[reportAny]
+                            "arguments": json.dumps(tool_call_data.get("arguments", {})),  # pyright: ignore[reportAny]
+                        },
+                    }
+
+                except json.JSONDecodeError:
+                    # Try parsing as pure XML (Qwen3-Coder format)
+                    tool_call = _parse_qwen_xml_tool_call(content, tool_call_index)
+
+                if tool_call is not None:
+                    tool_calls.append(tool_call)
+                    tool_call_index += 1
+
+                # Reset for next tool call
+                tool_call_buffer = ""
+                in_tool_call = False
+
+                # Don't yield the tool call XML content as visible text
+                continue
+
+        # If we're not in a tool call, yield the response normally
+        if not in_tool_call:
+            # Check if this is the final response
+            if response.finish_reason is not None:
+                # If we have tool calls, set finish_reason to "tool_calls"
+                if tool_calls:
+                    yield GenerationResponse(
+                        text="",
+                        token=response.token,
+                        finish_reason="tool_calls",
+                        stats=response.stats,
+                        tool_calls=tool_calls,
+                    )
+                else:
+                    yield response
+            else:
+                yield response
+
+
+def _parse_qwen_xml_tool_call(content: str, call_index: int) -> dict[str, Any] | None:
+    """
+    Parse Qwen3-Coder style pure XML tool calls.
+
+    Format:
+    <function=calculator>
+    <parameter=operation>multiply</parameter>
+    <parameter=a>5</parameter>
+    </function>
+
+    Returns OpenAI-compatible tool call dict or None if parsing fails.
+    """
+    # Extract function name from <function=name> tag
+    function_match = re.search(r"<function=([^>]+)>", content)
+    if not function_match:
+        return None
+
+    function_name = function_match.group(1).strip()
+
+    # Extract all parameters
+    arguments: dict[str, str] = {}
+    parameter_pattern = re.compile(r"<parameter=([^>]+)>\s*([^<]*?)\s*</parameter>", re.DOTALL)
+
+    for match in parameter_pattern.finditer(content):
+        param_name = match.group(1).strip()
+        param_value = match.group(2).strip()
+        arguments[param_name] = param_value
+
+    # Format as OpenAI-compatible tool call
+    return {
+        "id": f"call_{call_index}",
+        "type": "function",
+        "function": {
+            "name": function_name,
+            "arguments": json.dumps(arguments),
+        },
+    }
 EXO_RUNNER_MUST_FAIL = "EXO RUNNER MUST FAIL"
 EXO_RUNNER_MUST_OOM = "EXO RUNNER MUST OOM"
 EXO_RUNNER_MUST_TIMEOUT = "EXO RUNNER MUST TIMEOUT"

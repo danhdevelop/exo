@@ -1,9 +1,9 @@
-from typing import Any, Callable, Generator, cast, get_args
+from typing import Callable, Generator, List, cast, get_args
 
 import mlx.core as mx
 from mlx_lm import stream_generate
-from mlx_lm.models.cache import KVCache
-from mlx_lm.sample_utils import make_sampler
+# from mlx_lm.models.cache import KVCache  # unused, kept for future
+from mlx_lm.sample_utils import make_sampler, make_logits_processors  # pyright: ignore[reportUnknownVariableType]
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 # from exo.engines.mlx.cache import KVPrefixCache
@@ -129,10 +129,41 @@ def mlx_generate(
         eos_ids = eos_ids_from_tokenizer(tokenizer)
         logits_processors = [ban_token_ids(eos_ids)]
 
-    sampler = make_sampler(
-        temp=task.temperature if task.temperature is not None else 0.7,
-        top_p=task.top_p if task.top_p is not None else 1.0,
+    # Add logit bias and repetition penalty processors
+    additional_processors: List[Callable[[mx.array, mx.array], mx.array]] = make_logits_processors(
+        logit_bias=(
+            {int(k): float(v) for k, v in task.logit_bias.items()}
+            if task.logit_bias is not None
+            else None
+        ),
+        repetition_penalty=task.repetition_penalty,
+        repetition_context_size=task.repetition_context_size,
     )
+    if additional_processors:
+        logits_processors.extend(additional_processors)
+    # Build sampler kwargs with defaults
+    sampler_kwargs = {}
+    if task.temperature is not None:
+        sampler_kwargs['temp'] = task.temperature
+    else:
+        sampler_kwargs['temp'] = 0.7
+    if task.top_p is not None:
+        sampler_kwargs['top_p'] = task.top_p
+    else:
+        sampler_kwargs['top_p'] = 1.0
+    if task.top_k is not None:
+        sampler_kwargs['top_k'] = task.top_k
+    if task.min_p is not None:
+        sampler_kwargs['min_p'] = task.min_p
+    if task.min_tokens_to_keep is not None:
+        sampler_kwargs['min_tokens_to_keep'] = task.min_tokens_to_keep
+    if task.xtc_probability is not None:
+        sampler_kwargs['xtc_probability'] = task.xtc_probability
+    if task.xtc_threshold is not None:
+        sampler_kwargs['xtc_threshold'] = task.xtc_threshold
+    if task.xtc_special_tokens is not None:
+        sampler_kwargs['xtc_special_tokens'] = task.xtc_special_tokens
+    sampler = make_sampler(**sampler_kwargs)
 
     max_tokens = task.max_tokens or MAX_TOKENS
 

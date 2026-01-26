@@ -157,6 +157,14 @@ class ChatCompletionTaskParams(BaseModel):
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
+    min_tokens_to_keep: int | None = None
+    repetition_penalty: float | None = None
+    repetition_context_size: int | None = None
+    xtc_probability: float | None = None
+    xtc_threshold: float | None = None
+    xtc_special_tokens: list[int] | None = None
     tools: list[dict[str, Any]] | None = None
     tool_choice: str | dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None

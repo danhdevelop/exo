@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Any
 
 from exo.shared.types.api import GenerationStats
 from exo.utils.pydantic_ext import TaggedModel
@@ -23,6 +24,7 @@ class TokenChunk(BaseChunk):
     finish_reason: FinishReason | None = None
     stats: GenerationStats | None = None
     error_message: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class ImageChunk(BaseChunk):

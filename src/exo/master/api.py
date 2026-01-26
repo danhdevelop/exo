@@ -79,7 +79,11 @@ def chunk_to_response(
         choices=[
             StreamingChoiceResponse(
                 index=0,
-                delta=ChatCompletionMessage(role="assistant", content=chunk.text),
+                delta=ChatCompletionMessage(
+                    role="assistant",
+                    content=chunk.text,
+                    tool_calls=chunk.tool_calls,
+                ),
                 finish_reason=chunk.finish_reason,
             )
         ],
@@ -201,6 +205,9 @@ class API:
         self.app.get("/v1/models")(self.get_models)
         self.app.post("/v1/chat/completions", response_model=None)(
             self.chat_completions
+        )
+        self.app.post("/v1/qwen/chat/completions", response_model=None)(
+            self.qwen_chat_completions
         )
         self.app.post("/bench/chat/completions")(self.bench_chat_completions)
         self.app.get("/state")(lambda: self.state)
@@ -474,6 +481,7 @@ class API:
         text_parts: list[str] = []
         model: str | None = None
         finish_reason: FinishReason | None = None
+        tool_calls = None
 
         async for chunk in self._chat_chunk_stream(command_id):
             if chunk.finish_reason == "error":
@@ -486,6 +494,9 @@ class API:
                 model = chunk.model
 
             text_parts.append(chunk.text)
+
+            if chunk.tool_calls is not None:
+                tool_calls = chunk.tool_calls
 
             if chunk.finish_reason is not None:
                 finish_reason = chunk.finish_reason
@@ -503,6 +514,7 @@ class API:
                     message=ChatCompletionMessage(
                         role="assistant",
                         content=combined_text,
+                        tool_calls=tool_calls,
                     ),
                     finish_reason=finish_reason,
                 )
@@ -515,6 +527,7 @@ class API:
         text_parts: list[str] = []
         model: str | None = None
         finish_reason: FinishReason | None = None
+        tool_calls = None
 
         stats: GenerationStats | None = None
 
@@ -531,6 +544,9 @@ class API:
             text_parts.append(chunk.text)
             stats = chunk.stats or stats
 
+            if chunk.tool_calls is not None:
+                tool_calls = chunk.tool_calls
+
             if chunk.finish_reason is not None:
                 finish_reason = chunk.finish_reason
 
@@ -545,7 +561,9 @@ class API:
                 ChatCompletionChoice(
                     index=0,
                     message=ChatCompletionMessage(
-                        role="assistant", content=combined_text
+                        role="assistant",
+                        content=combined_text,
+                        tool_calls=tool_calls,
                     ),
                     finish_reason=finish_reason,
                 )
@@ -587,6 +605,13 @@ class API:
 
         return await self._collect_chat_completion(command.command_id)
 
+    async def qwen_chat_completions(
+        self, payload: ChatCompletionTaskParams
+    ) -> ChatCompletionResponse | StreamingResponse:
+        """Handle Qwen native API chat completions."""
+        # For now, delegate to standard chat completions
+        # TODO: Add Qwen-specific request parsing if needed
+        return await self.chat_completions(payload)
     async def bench_chat_completions(
         self, payload: BenchChatCompletionTaskParams
     ) -> BenchChatCompletionResponse:
