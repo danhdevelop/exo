@@ -27,6 +27,7 @@ dependencies = [
     "hypercorn>=0.18.0",
     "openai-harmony>=0.0.8",
     "httpx>=0.28.1",
+    "blackbox-agent",
 ]
 
 [project.scripts]
@@ -66,6 +67,7 @@ members = [
 
 [tool.uv.sources]
 exo_pyo3_bindings = { workspace = true }
+blackbox-agent = { path = "../../trello_workflow", editable = true }
 # Uncomment to use local mlx/mlx-lm development versions:
 # mlx = { path = "/Users/Shared/mlx", editable=true }
 # mlx-lm = { path = "/Users/Shared/mlx-lm", editable=true }
