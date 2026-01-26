@@ -26,7 +26,7 @@ def entrypoint(
         fast_synch_override != "off"
         and (
             isinstance(bound_instance.instance, MlxJacclInstance)
-            and len(bound_instance.instance.ibv_devices) >= 2
+            and len(bound_instance.instance.jaccl_devices) >= 2
         )
     ):
         os.environ["MLX_METAL_FAST_SYNCH"] = "1"

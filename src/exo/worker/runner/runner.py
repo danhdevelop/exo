@@ -1,23 +1,26 @@
+import base64
 import json
-import re
 import time
 from collections.abc import Generator
 from functools import cache
-from typing import Any
+from typing import Any, Callable, Literal
 
 import mlx.core as mx
 from mlx_lm.models.gpt_oss import Model as GptOssModel
-from mlx_lm.models.qwen3_moe import Model as Qwen3MoeModel
-from mlx_lm.models.qwen3_next import Model as Qwen3NextModel
+from mlx_lm.tokenizer_utils import TokenizerWrapper
 from openai_harmony import (  # pyright: ignore[reportMissingTypeStubs]
     HarmonyEncodingName,
     Role,
     StreamableParser,
     load_harmony_encoding,
 )
+from pydantic import ValidationError
 
-from exo.shared.types.api import ChatCompletionMessageText
-from exo.shared.types.chunks import TokenChunk
+from exo.shared.constants import EXO_MAX_CHUNK_SIZE
+from exo.shared.models.model_cards import ModelId, ModelTask
+from exo.shared.types.api import ChatCompletionMessageText, ImageGenerationStats
+from exo.shared.types.chunks import ErrorChunk, ImageChunk, TokenChunk, ToolCallChunk
+from exo.shared.types.common import CommandId
 from exo.shared.types.events import (
     ChunkGenerated,
     Event,
@@ -28,6 +31,8 @@ from exo.shared.types.events import (
 from exo.shared.types.tasks import (
     ChatCompletion,
     ConnectToGroup,
+    ImageEdits,
+    ImageGeneration,
     LoadModel,
     Shutdown,
     StartWarmup,
@@ -37,6 +42,10 @@ from exo.shared.types.tasks import (
 from exo.shared.types.worker.instances import BoundInstance
 from exo.shared.types.worker.runner_response import (
     GenerationResponse,
+    ImageGenerationResponse,
+    PartialImageResponse,
+    ToolCallItem,
+    ToolCallResponse,
 )
 from exo.shared.types.worker.runners import (
     RunnerConnected,
@@ -52,9 +61,19 @@ from exo.shared.types.worker.runners import (
     RunnerStatus,
     RunnerWarmingUp,
 )
+from exo.shared.types.worker.shards import ShardMetadata
 from exo.utils.channels import MpReceiver, MpSender
+from exo.worker.engines.image import (
+    DistributedImageModel,
+    generate_image,
+    initialize_image_model,
+    warmup_image_generator,
+)
+from exo.worker.engines.mlx import Model
 from exo.worker.engines.mlx.generator.generate import mlx_generate, warmup_inference
 from exo.worker.engines.mlx.utils_mlx import (
+    apply_chat_template,
+    detect_thinking_prompt_suffix,
     initialize_mlx,
     load_mlx_items,
 )
@@ -83,7 +102,7 @@ def main(
 
     setup_start_time = time.time()
 
-    model = None
+    model: Model | DistributedImageModel | None = None
     tokenizer = None
     group = None
 
@@ -136,15 +155,28 @@ def main(
                         )
                         time.sleep(0.5)
 
-                    model, tokenizer = load_mlx_items(
-                        bound_instance, group, on_timeout=on_model_load_timeout
-                    )
+                    if ModelTask.TextGeneration in shard_metadata.model_card.tasks:
+                        model, tokenizer = load_mlx_items(
+                            bound_instance, group, on_timeout=on_model_load_timeout
+                        )
+                        logger.info(
+                            f"model has_tool_calling={tokenizer.has_tool_calling}"
+                        )
+                    elif (
+                        ModelTask.TextToImage in shard_metadata.model_card.tasks
+                        or ModelTask.ImageToImage in shard_metadata.model_card.tasks
+                    ):
+                        model = initialize_image_model(bound_instance)
+                    else:
+                        raise ValueError(
+                            f"Unknown model task(s): {shard_metadata.model_card.tasks}"
+                        )
 
                     current_status = RunnerLoaded()
                     logger.info("runner loaded")
                 case StartWarmup() if isinstance(current_status, RunnerLoaded):
                     assert model
-                    assert tokenizer
+
                     current_status = RunnerWarmingUp()
                     logger.info("runner warming up")
                     event_sender.send(
@@ -154,21 +186,36 @@ def main(
                     )
 
                     logger.info(f"warming up inference for instance: {instance}")
-                    toks = warmup_inference(
-                        model=model,
-                        tokenizer=tokenizer,
-                        # kv_prefix_cache=kv_prefix_cache,  # supply for warmup-time prefix caching
-                    )
-                    logger.info(f"warmed up by generating {toks} tokens")
-                    logger.info(
-                        f"runner initialized in {time.time() - setup_start_time} seconds"
-                    )
+                    if ModelTask.TextGeneration in shard_metadata.model_card.tasks:
+                        assert not isinstance(model, DistributedImageModel)
+                        assert tokenizer
+
+                        toks = warmup_inference(
+                            model=model,
+                            tokenizer=tokenizer,
+                            # kv_prefix_cache=kv_prefix_cache,  # supply for warmup-time prefix caching
+                        )
+                        logger.info(f"warmed up by generating {toks} tokens")
+                        logger.info(
+                            f"runner initialized in {time.time() - setup_start_time} seconds"
+                        )
+                    elif (
+                        ModelTask.TextToImage in shard_metadata.model_card.tasks
+                        or ModelTask.ImageToImage in shard_metadata.model_card.tasks
+                    ):
+                        assert isinstance(model, DistributedImageModel)
+                        image = warmup_image_generator(model=model)
+                        if image is not None:
+                            logger.info(f"warmed up by generating {image.size} image")
+                        else:
+                            logger.info("warmup completed (non-primary node)")
+
                     current_status = RunnerReady()
                     logger.info("runner ready")
                 case ChatCompletion(task_params=task_params, command_id=command_id) if (
                     isinstance(current_status, RunnerReady)
                 ):
-                    logger.info(f"received chat request: {str(task)[:500]}")
+                    logger.info(f"received chat request: {task}")
                     current_status = RunnerRunning()
                     logger.info("runner running")
                     event_sender.send(
@@ -176,23 +223,42 @@ def main(
                             runner_id=runner_id, runner_status=current_status
                         )
                     )
-                    assert model
+                    assert model and not isinstance(model, DistributedImageModel)
                     assert tokenizer
                     assert task_params.messages[0].content is not None
 
                     try:
                         _check_for_debug_prompts(task_params.messages[0].content)
 
+                        # Build prompt once - used for both generation and thinking detection
+                        prompt = apply_chat_template(tokenizer, task_params)
+
                         # Generate responses using the actual MLX generation
                         mlx_generator = mlx_generate(
                             model=model,
                             tokenizer=tokenizer,
                             task=task_params,
+                            prompt=prompt,
                         )
 
+                        # For other thinking models (GLM, etc.), check if we need to
+                        # prepend the thinking tag that was consumed by the chat template
+                        if detect_thinking_prompt_suffix(prompt, tokenizer):
+                            mlx_generator = parse_thinking_models(
+                                mlx_generator, tokenizer
+                            )
+
+                        # Kimi-K2 has tool call sections - we don't care about them
+                        if "kimi" in shard_metadata.model_card.model_id.lower():
+                            mlx_generator = filter_kimi_tokens(mlx_generator)
+                            patch_kimi_tokenizer(tokenizer)
+
+                        # GLM models need patched parser (upstream has bug with None regex match)
+                        elif "glm" in shard_metadata.model_card.model_id.lower():
+                            patch_glm_tokenizer(tokenizer)
+
                         # GPT-OSS specific parsing to match other model formats.
-                        # GPT-OSS specific parsing to match other model formats.
-                        if isinstance(model, GptOssModel):
+                        elif isinstance(model, GptOssModel):
                             mlx_generator = parse_gpt_oss(mlx_generator)
                         # Qwen thinking models parsing
                         elif isinstance(model, (Qwen3NextModel, Qwen3MoeModel)):
@@ -200,25 +266,63 @@ def main(
                             # For now, apply parse_qwen_thinking
                             mlx_generator = parse_qwen_thinking(mlx_generator)
 
-                        # Apply tool call parser for Qwen models
-                        if isinstance(model, (Qwen3NextModel, Qwen3MoeModel)):
-                            mlx_generator = parse_qwen_tool_calls(mlx_generator)
+                        if tokenizer.has_tool_calling and not isinstance(
+                            model, GptOssModel
+                        ):
+                            assert tokenizer.tool_call_start
+                            assert tokenizer.tool_call_end
+                            assert tokenizer.tool_parser  # pyright: ignore[reportAny]
+                            mlx_generator = parse_tool_calls(
+                                mlx_generator,
+                                tokenizer.tool_call_start,
+                                tokenizer.tool_call_end,
+                                tokenizer.tool_parser,  # pyright: ignore[reportAny]
+                            )
 
                         for response in mlx_generator:
                             match response:
                                 case GenerationResponse():
-                                    if device_rank == 0:
+                                    if (
+                                        device_rank == 0
+                                        and response.finish_reason == "error"
+                                    ):
+                                        event_sender.send(
+                                            ChunkGenerated(
+                                                command_id=command_id,
+                                                chunk=ErrorChunk(
+                                                    error_message=response.text,
+                                                    model=shard_metadata.model_card.model_id,
+                                                ),
+                                            )
+                                        )
+
+                                    elif device_rank == 0:
+                                        assert response.finish_reason not in (
+                                            "error",
+                                            "tool_calls",
+                                            "function_call",
+                                        )
                                         event_sender.send(
                                             ChunkGenerated(
                                                 command_id=command_id,
                                                 chunk=TokenChunk(
-                                                    idx=response.token,
-                                                    model=shard_metadata.model_meta.model_id,
+                                                    model=shard_metadata.model_card.model_id,
                                                     text=response.text,
                                                     token_id=response.token,
                                                     finish_reason=response.finish_reason,
                                                     stats=response.stats,
                                                     tool_calls=response.tool_calls,
+                                                ),
+                                            )
+                                        )
+                                case ToolCallResponse():
+                                    if device_rank == 0:
+                                        event_sender.send(
+                                            ChunkGenerated(
+                                                command_id=command_id,
+                                                chunk=ToolCallChunk(
+                                                    tool_calls=response.tool_calls,
+                                                    model=shard_metadata.model_card.model_id,
                                                 ),
                                             )
                                         )
@@ -229,11 +333,127 @@ def main(
                             event_sender.send(
                                 ChunkGenerated(
                                     command_id=command_id,
-                                    chunk=TokenChunk(
-                                        idx=0,
-                                        model=shard_metadata.model_meta.model_id,
-                                        text="",
-                                        token_id=0,
+                                    chunk=ErrorChunk(
+                                        model=shard_metadata.model_card.model_id,
+                                        finish_reason="error",
+                                        error_message=str(e),
+                                    ),
+                                )
+                            )
+                        raise
+
+                    current_status = RunnerReady()
+                    logger.info("runner ready")
+                case ImageGeneration(
+                    task_params=task_params, command_id=command_id
+                ) if isinstance(current_status, RunnerReady):
+                    assert isinstance(model, DistributedImageModel)
+                    logger.info(f"received image generation request: {str(task)[:500]}")
+                    current_status = RunnerRunning()
+                    logger.info("runner running")
+                    event_sender.send(
+                        RunnerStatusUpdated(
+                            runner_id=runner_id, runner_status=current_status
+                        )
+                    )
+
+                    try:
+                        # Generate images using the image generation backend
+                        # Track image_index for final images only
+                        image_index = 0
+                        for response in generate_image(model=model, task=task_params):
+                            if (
+                                shard_metadata.device_rank
+                                == shard_metadata.world_size - 1
+                            ):
+                                match response:
+                                    case PartialImageResponse():
+                                        logger.info(
+                                            f"sending partial ImageChunk {response.partial_index}/{response.total_partials}"
+                                        )
+                                        _process_image_response(
+                                            response,
+                                            command_id,
+                                            shard_metadata,
+                                            event_sender,
+                                            image_index,
+                                        )
+                                    case ImageGenerationResponse():
+                                        logger.info("sending final ImageChunk")
+                                        _process_image_response(
+                                            response,
+                                            command_id,
+                                            shard_metadata,
+                                            event_sender,
+                                            image_index,
+                                        )
+                                        image_index += 1
+                    # can we make this more explicit?
+                    except Exception as e:
+                        if shard_metadata.device_rank == shard_metadata.world_size - 1:
+                            event_sender.send(
+                                ChunkGenerated(
+                                    command_id=command_id,
+                                    chunk=ErrorChunk(
+                                        model=shard_metadata.model_card.model_id,
+                                        finish_reason="error",
+                                        error_message=str(e),
+                                    ),
+                                )
+                            )
+                        raise
+
+                    current_status = RunnerReady()
+                    logger.info("runner ready")
+                case ImageEdits(task_params=task_params, command_id=command_id) if (
+                    isinstance(current_status, RunnerReady)
+                ):
+                    assert isinstance(model, DistributedImageModel)
+                    logger.info(f"received image edits request: {str(task)[:500]}")
+                    current_status = RunnerRunning()
+                    logger.info("runner running")
+                    event_sender.send(
+                        RunnerStatusUpdated(
+                            runner_id=runner_id, runner_status=current_status
+                        )
+                    )
+
+                    try:
+                        image_index = 0
+                        for response in generate_image(model=model, task=task_params):
+                            if (
+                                shard_metadata.device_rank
+                                == shard_metadata.world_size - 1
+                            ):
+                                match response:
+                                    case PartialImageResponse():
+                                        logger.info(
+                                            f"sending partial ImageChunk {response.partial_index}/{response.total_partials}"
+                                        )
+                                        _process_image_response(
+                                            response,
+                                            command_id,
+                                            shard_metadata,
+                                            event_sender,
+                                            image_index,
+                                        )
+                                    case ImageGenerationResponse():
+                                        logger.info("sending final ImageChunk")
+                                        _process_image_response(
+                                            response,
+                                            command_id,
+                                            shard_metadata,
+                                            event_sender,
+                                            image_index,
+                                        )
+                                        image_index += 1
+                    except Exception as e:
+                        if shard_metadata.device_rank == shard_metadata.world_size - 1:
+                            event_sender.send(
+                                ChunkGenerated(
+                                    command_id=command_id,
+                                    chunk=ErrorChunk(
+                                        model=shard_metadata.model_card.model_id,
                                         finish_reason="error",
                                         error_message=str(e),
                                     ),
@@ -277,25 +497,57 @@ def get_gpt_oss_encoding():
     return encoding
 
 
-def parse_gpt_oss(
-    responses: Generator[GenerationResponse],
+def filter_kimi_tokens(
+    responses: Generator[GenerationResponse | ToolCallResponse],
 ) -> Generator[GenerationResponse]:
+    for resp in responses:
+        assert isinstance(resp, GenerationResponse)
+        if (
+            resp.text == "<|tool_calls_section_begin|>"
+            or resp.text == "<|tool_calls_section_end|>"
+        ):
+            continue
+        yield resp
+
+
+def parse_gpt_oss(
+    responses: Generator[GenerationResponse | ToolCallResponse],
+) -> Generator[GenerationResponse | ToolCallResponse]:
     encoding = get_gpt_oss_encoding()
     stream = StreamableParser(encoding, role=Role.ASSISTANT)
     thinking = False
-    parser_active = False
-    use_passthrough = False
-    token_count = 0
-    first_error_logged = False
+    current_tool_name: str | None = None
+    tool_arg_parts: list[str] = []
 
     for response in responses:
-        token_count += 1
+        assert isinstance(response, GenerationResponse)
+        stream.process(response.token)
 
-        # If we've switched to passthrough mode, just yield tokens directly
-        if use_passthrough:
-            yield response
-            if response.finish_reason is not None:
+        delta = stream.last_content_delta
+        ch = stream.current_channel
+        recipient = stream.current_recipient
+
+        if recipient != current_tool_name:
+            if current_tool_name is not None:
+                prefix = "functions."
+                if current_tool_name.startswith(prefix):
+                    current_tool_name = current_tool_name[len(prefix) :]
+                yield ToolCallResponse(
+                    tool_calls=[
+                        ToolCallItem(
+                            name=current_tool_name,
+                            arguments="".join(tool_arg_parts).strip(),
+                        )
+                    ]
+                )
+                tool_arg_parts = []
                 break
+            current_tool_name = recipient
+
+        # If inside a tool call, accumulate arguments
+        if current_tool_name is not None:
+            if delta:
+                tool_arg_parts.append(delta)
             continue
 
         try:
@@ -348,7 +600,290 @@ def parse_gpt_oss(
             if thinking:
                 yield response.model_copy(update={"text": "</think>"})
             yield response
-            break
+
+
+def parse_thinking_models(
+    responses: Generator[GenerationResponse | ToolCallResponse],
+    tokenizer: TokenizerWrapper,
+) -> Generator[GenerationResponse | ToolCallResponse]:
+    """
+    For models that inject thinking tags in the prompt (like GLM-4.7),
+    prepend the thinking tag to the output stream so the frontend
+    can properly parse thinking content.
+    """
+    first = True
+    for response in responses:
+        if isinstance(response, ToolCallResponse):
+            yield response
+            continue
+        if first:
+            first = False
+            yield response.model_copy(
+                update={
+                    "text": tokenizer.think_start,
+                    "token": tokenizer.think_start_id,  # type: ignore
+                }
+            )
+        yield response
+
+
+def _send_image_chunk(
+    encoded_data: str,
+    command_id: CommandId,
+    model_id: ModelId,
+    event_sender: MpSender[Event],
+    image_index: int,
+    is_partial: bool,
+    partial_index: int | None = None,
+    total_partials: int | None = None,
+    stats: ImageGenerationStats | None = None,
+    image_format: Literal["png", "jpeg", "webp"] | None = None,
+) -> None:
+    """Send base64-encoded image data as chunks via events."""
+    data_chunks = [
+        encoded_data[i : i + EXO_MAX_CHUNK_SIZE]
+        for i in range(0, len(encoded_data), EXO_MAX_CHUNK_SIZE)
+    ]
+    total_chunks = len(data_chunks)
+    for chunk_index, chunk_data in enumerate(data_chunks):
+        # Only include stats on the last chunk of the final image
+        chunk_stats = (
+            stats if chunk_index == total_chunks - 1 and not is_partial else None
+        )
+        event_sender.send(
+            ChunkGenerated(
+                command_id=command_id,
+                chunk=ImageChunk(
+                    model=model_id,
+                    data=chunk_data,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
+                    image_index=image_index,
+                    is_partial=is_partial,
+                    partial_index=partial_index,
+                    total_partials=total_partials,
+                    stats=chunk_stats,
+                    format=image_format,
+                ),
+            )
+        )
+
+
+def _process_image_response(
+    response: ImageGenerationResponse | PartialImageResponse,
+    command_id: CommandId,
+    shard_metadata: ShardMetadata,
+    event_sender: MpSender[Event],
+    image_index: int,
+) -> None:
+    """Process a single image response and send chunks."""
+    encoded_data = base64.b64encode(response.image_data).decode("utf-8")
+    is_partial = isinstance(response, PartialImageResponse)
+    # Extract stats from final ImageGenerationResponse if available
+    stats = response.stats if isinstance(response, ImageGenerationResponse) else None
+    _send_image_chunk(
+        encoded_data=encoded_data,
+        command_id=command_id,
+        model_id=shard_metadata.model_card.model_id,
+        event_sender=event_sender,
+        image_index=response.image_index,
+        is_partial=is_partial,
+        partial_index=response.partial_index if is_partial else None,
+        total_partials=response.total_partials if is_partial else None,
+        stats=stats,
+        image_format=response.format,
+    )
+
+
+def parse_tool_calls(
+    responses: Generator[GenerationResponse | ToolCallResponse],
+    tool_call_start: str,
+    tool_call_end: str,
+    tool_parser: Callable[[str], dict[str, Any] | list[dict[str, Any]]],
+) -> Generator[GenerationResponse | ToolCallResponse]:
+    in_tool_call = False
+    tool_call_text_parts: list[str] = []
+    for response in responses:
+        assert isinstance(response, GenerationResponse)
+        # assumption: the tool call start is one token
+        if response.text == tool_call_start:
+            in_tool_call = True
+            continue
+        # assumption: the tool call end is one token
+        if in_tool_call and response.text == tool_call_end:
+            try:
+                # tool_parser returns an arbitrarily nested python dictionary
+                # we actually don't want the python dictionary, we just want to
+                # parse the top level { function: ..., arguments: ... } structure
+                # as we're just gonna hand it back to the api anyway
+                parsed = tool_parser("".join(tool_call_text_parts).strip())
+                logger.info(f"parsed {tool_call_text_parts=} into {parsed=}")
+                if isinstance(parsed, list):
+                    tools = [_validate_single_tool(tool) for tool in parsed]
+                else:
+                    tools = [_validate_single_tool(parsed)]
+                yield ToolCallResponse(tool_calls=tools)
+
+            except (
+                json.JSONDecodeError,
+                ValidationError,
+                ValueError,
+                AttributeError,
+            ) as e:
+                # ValueError: our parsers raise this for malformed tool calls
+                # AttributeError: upstream parsers (e.g. glm47) may raise this when regex doesn't match
+                logger.opt(exception=e).warning("tool call parsing failed")
+                # assumption: talking about tool calls, not making a tool call
+                response.text = (
+                    tool_call_start + "".join(tool_call_text_parts) + tool_call_end
+                )
+                yield response
+
+            in_tool_call = False
+            tool_call_text_parts = []
+            continue
+
+        if in_tool_call:
+            tool_call_text_parts.append(response.text)
+            continue
+        # fallthrough
+        yield response
+
+
+def patch_kimi_tokenizer(tokenizer: TokenizerWrapper):
+    """
+    Version of to-be-upstreamed kimi-k2 tool parser
+    """
+    import ast
+    import json
+    from typing import Any
+
+    import regex as re
+
+    # kimi has a fixed function naming scheme, with a json formatted arg
+    #   functions.multiply:0 <|tool_call_argument_begin|> {"a": 2, "b": 3}
+    _func_name_regex = re.compile(
+        r"^\s*(.+):\d+\s*<\|tool_call_argument_begin\|>", re.DOTALL
+    )
+    _func_arg_regex = re.compile(r"<\|tool_call_argument_begin\|>\s*(.*)\s*", re.DOTALL)
+
+    # kimi has a tool_calls_section - we're leaving this up to the caller to handle
+    tool_call_start = "<|tool_call_begin|>"
+    tool_call_end = "<|tool_call_end|>"
+
+    def _deserialize(value: str) -> Any:  # pyright: ignore[reportAny]
+        try:
+            return json.loads(value)  # pyright: ignore[reportAny]
+        except Exception:
+            pass
+
+        try:
+            return ast.literal_eval(value)  # pyright: ignore[reportAny]
+        except Exception:
+            pass
+        return value
+
+    def parse_tool_call(text: str, tools: Any | None = None):
+        func_name_match = _func_name_regex.search(text)
+        if func_name_match is None:
+            raise ValueError(f"Could not parse function name from tool call: {text!r}")
+        func_name = func_name_match.group(1)
+        # strip off the `functions.` prefix, if it exists.
+        func_name = func_name[func_name.find(".") + 1 :]
+
+        func_args_match = _func_arg_regex.search(text)
+        if func_args_match is None:
+            raise ValueError(f"Could not parse function args from tool call: {text!r}")
+        func_args = func_args_match.group(1)
+        # the args should be valid json - no need to check against our tools to deserialize
+        arg_dct = _deserialize(func_args)  # pyright: ignore[reportAny]
+
+        return dict(name=func_name, arguments=arg_dct)  # pyright: ignore[reportAny]
+
+    tokenizer._tool_call_start = tool_call_start
+    tokenizer._tool_call_end = tool_call_end
+    tokenizer._tool_parser = parse_tool_call
+
+
+def patch_glm_tokenizer(tokenizer: TokenizerWrapper):
+    """
+    Fixed version of mlx_lm's glm47 tool parser that handles regex match failures.
+    """
+    import ast
+    import json
+    from typing import Any
+
+    import regex as re
+
+    _func_name_regex = re.compile(r"^(.*?)<arg_key>", re.DOTALL)
+    _func_arg_regex = re.compile(
+        r"<arg_key>(.*?)</arg_key>(?:\\n|\s)*<arg_value>(.*?)</arg_value>",
+        re.DOTALL,
+    )
+
+    tool_call_start = "<tool_call>"
+    tool_call_end = "</tool_call>"
+
+    def _is_string_type(
+        tool_name: str,
+        arg_name: str,
+        tools: list[Any] | None,
+    ) -> bool:
+        if tools is None:
+            return False
+        for tool in tools:  # pyright: ignore[reportAny]
+            func = tool["function"]  # pyright: ignore[reportAny]
+            if func["name"] == tool_name:
+                params = func["parameters"]  # pyright: ignore[reportAny]
+                if params is None:
+                    return False
+                props = params.get("properties", {})  # pyright: ignore[reportAny]
+                arg_props = props.get(arg_name, {})  # pyright: ignore[reportAny]
+                arg_type = arg_props.get("type", None)  # pyright: ignore[reportAny]
+                return arg_type == "string"  # pyright: ignore[reportAny]
+        return False
+
+    def _deserialize(value: str) -> Any:  # pyright: ignore[reportAny]
+        try:
+            return json.loads(value)  # pyright: ignore[reportAny]
+        except Exception:
+            pass
+        try:
+            return ast.literal_eval(value)  # pyright: ignore[reportAny]
+        except Exception:
+            pass
+        return value
+
+    def parse_tool_call(text: str, tools: list[Any] | None = None):
+        func_name_match = _func_name_regex.search(text)
+        if func_name_match is None:
+            raise ValueError(f"Could not parse function name from tool call: {text!r}")
+        func_name = func_name_match.group(1)
+
+        pairs = _func_arg_regex.findall(text)
+        arg_dct: dict[str, Any] = {}
+        for key, value in pairs:  # pyright: ignore[reportAny]
+            arg_key = key.strip()  # pyright: ignore[reportAny]
+            arg_val = value.strip()  # pyright: ignore[reportAny]
+            if not _is_string_type(func_name, arg_key, tools):  # pyright: ignore[reportAny]
+                arg_val = _deserialize(arg_val)  # pyright: ignore[reportAny]
+            arg_dct[arg_key] = arg_val
+        return dict(name=func_name, arguments=arg_dct)
+
+    tokenizer._tool_call_start = tool_call_start
+    tokenizer._tool_call_end = tool_call_end
+    tokenizer._tool_parser = parse_tool_call
+
+
+def _validate_single_tool(obj: dict[str, Any]) -> ToolCallItem:
+    if (
+        ((name := obj.get("name")) is not None)
+        and ((args := obj.get("arguments")) is not None)
+        and isinstance(name, str)
+    ):
+        return ToolCallItem(name=name, arguments=json.dumps(args))
+    else:
+        raise ValidationError
 
 
 def parse_qwen_thinking(

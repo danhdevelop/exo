@@ -2,9 +2,7 @@ import json
 import os
 import resource
 import sys
-import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,6 +23,7 @@ from mlx_lm.models.deepseek_v3 import DeepseekV3Model
 from mlx_lm.models.gpt_oss import Model as GptOssModel
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
+from exo.shared.models.model_cards import ModelId
 from exo.worker.engines.mlx.constants import (
     CACHE_GROUP_SIZE,
     KV_CACHE_BITS,
@@ -42,6 +41,7 @@ import mlx.nn as nn
 from mlx_lm.utils import load_model
 from pydantic import RootModel
 
+from exo.download.download_utils import build_model_path
 from exo.shared.types.api import ChatCompletionMessageText
 from exo.shared.types.common import Host
 from exo.shared.types.memory import Memory
@@ -56,9 +56,10 @@ from exo.shared.types.worker.shards import (
     ShardMetadata,
     TensorShardMetadata,
 )
-from exo.worker.download.download_utils import build_model_path
 from exo.worker.engines.mlx import Model
 from exo.worker.engines.mlx.auto_parallel import (
+    TimeoutCallback,
+    eval_with_timeout,
     pipeline_auto_parallel,
     tensor_auto_parallel,
 )
@@ -75,7 +76,7 @@ def get_weights_size(model_shard_meta: ShardMetadata) -> Memory:
     return Memory.from_float_kb(
         (model_shard_meta.end_layer - model_shard_meta.start_layer)
         / model_shard_meta.n_layers
-        * model_shard_meta.model_meta.storage_size.in_kb
+        * model_shard_meta.model_card.storage_size.in_kb
         / (
             1
             if isinstance(model_shard_meta, PipelineShardMetadata)
@@ -86,41 +87,6 @@ def get_weights_size(model_shard_meta: ShardMetadata) -> Memory:
 
 class ModelLoadingTimeoutError(Exception):
     pass
-
-
-TimeoutCallback = Callable[[], None]
-
-
-def eval_with_timeout(
-    mlx_item: Any,  # pyright: ignore[reportAny]
-    timeout_seconds: float = 60.0,
-    on_timeout: TimeoutCallback | None = None,
-) -> None:
-    """Evaluate MLX item with a hard timeout.
-
-    If on_timeout callback is provided, it will be called before terminating
-    the process. This allows the runner to send a failure event before exit.
-    """
-    completed = threading.Event()
-
-    def watchdog() -> None:
-        if not completed.wait(timeout=timeout_seconds):
-            logger.error(
-                f"mlx_item evaluation timed out after {timeout_seconds:.0f}s. "
-                "This may indicate an issue with FAST_SYNCH and tensor parallel sharding. "
-                "Terminating process."
-            )
-            if on_timeout is not None:
-                on_timeout()
-            os._exit(1)
-
-    watchdog_thread = threading.Thread(target=watchdog, daemon=True)
-    watchdog_thread.start()
-
-    try:
-        mx.eval(mlx_item)  # pyright: ignore[reportAny]
-    finally:
-        completed.set()
 
 
 def mx_barrier(group: Group | None = None):
@@ -186,22 +152,28 @@ def mlx_distributed_init(
                 group = mx.distributed.init(backend="ring", strict=True)
 
             case MlxJacclInstance(
-                ibv_devices=ibv_devices, jaccl_coordinators=jaccl_coordinators
+                jaccl_devices=jaccl_devices, jaccl_coordinators=jaccl_coordinators
             ):
+                assert all(
+                    jaccl_devices[i][i] is None for i in range(len(jaccl_devices))
+                )
                 # Use RDMA connectivity matrix
                 coordination_file = (
                     f"./hosts_{bound_instance.instance.instance_id}_{rank}.json"
                 )
-                ibv_devices_json = json.dumps(ibv_devices)
+                jaccl_devices_json = json.dumps(jaccl_devices)
 
                 with open(coordination_file, "w") as f:
-                    _ = f.write(ibv_devices_json)
+                    _ = f.write(jaccl_devices_json)
 
                 jaccl_coordinator = jaccl_coordinators[bound_instance.bound_node_id]
 
-                logger.info(f"rank {rank} MLX_IBV_DEVICES: {ibv_devices_json}")
+                # TODO: update once upstream fixes
+                logger.info(
+                    f"rank {rank} MLX_JACCL_DEVICES: {coordination_file} with devices: {jaccl_devices_json}"
+                )
                 logger.info(f"rank {rank} MLX_JACCL_COORDINATOR: {jaccl_coordinator}")
-                os.environ["MLX_IBV_DEVICES"] = coordination_file
+                os.environ["MLX_JACCL_DEVICES"] = coordination_file
                 os.environ["MLX_RANK"] = str(rank)
                 os.environ["MLX_JACCL_COORDINATOR"] = jaccl_coordinator
                 group = mx.distributed.init(backend="jaccl", strict=True)
@@ -235,7 +207,7 @@ def load_mlx_items(
 ) -> tuple[Model, TokenizerWrapper]:
     if group is None:
         logger.info(f"Single device used for {bound_instance.instance}")
-        model_path = build_model_path(bound_instance.bound_shard.model_meta.model_id)
+        model_path = build_model_path(bound_instance.bound_shard.model_card.model_id)
         start_time = time.perf_counter()
         model, _ = load_model(model_path, strict=True)
         end_time = time.perf_counter()
@@ -263,7 +235,7 @@ def shard_and_load(
     group: Group,
     on_timeout: TimeoutCallback | None = None,
 ) -> tuple[nn.Module, TokenizerWrapper]:
-    model_path = build_model_path(shard_metadata.model_meta.model_id)
+    model_path = build_model_path(shard_metadata.model_card.model_id)
 
     model, _ = load_model(model_path, lazy=True, strict=False)
     logger.debug(model)
@@ -290,14 +262,6 @@ def shard_and_load(
 
     logger.info(f"Group size: {group.size()}, group rank: {group.rank()}")
 
-    match shard_metadata:
-        case TensorShardMetadata():
-            logger.info(f"loading model from {model_path} with tensor parallelism")
-            model = tensor_auto_parallel(model, group)
-        case PipelineShardMetadata():
-            logger.info(f"loading model from {model_path} with pipeline parallelism")
-            model = pipeline_auto_parallel(model, group, shard_metadata)
-
     # Estimate timeout based on model size
     base_timeout = float(os.environ.get("EXO_MODEL_LOAD_TIMEOUT", "60"))
     model_size_gb = get_weights_size(shard_metadata).in_bytes / (1024**3)
@@ -306,7 +270,15 @@ def shard_and_load(
         f"Evaluating model parameters with timeout of {timeout_seconds:.0f}s "
         f"(model size: {model_size_gb:.1f}GB)"
     )
-    eval_with_timeout(model.parameters(), timeout_seconds, on_timeout)
+
+    match shard_metadata:
+        case TensorShardMetadata():
+            logger.info(f"loading model from {model_path} with tensor parallelism")
+            model = tensor_auto_parallel(model, group, timeout_seconds, on_timeout)
+        case PipelineShardMetadata():
+            logger.info(f"loading model from {model_path} with pipeline parallelism")
+            model = pipeline_auto_parallel(model, group, shard_metadata)
+            eval_with_timeout(model.parameters(), timeout_seconds, on_timeout)
 
     # TODO: Do we need this?
     mx.eval(model)
@@ -322,10 +294,10 @@ def shard_and_load(
 
 def get_tokenizer(model_path: Path, shard_metadata: ShardMetadata) -> TokenizerWrapper:
     """Load tokenizer for a model shard. Delegates to load_tokenizer_for_model_id."""
-    return load_tokenizer_for_model_id(shard_metadata.model_meta.model_id, model_path)
+    return load_tokenizer_for_model_id(shard_metadata.model_card.model_id, model_path)
 
 
-def get_eos_token_ids_for_model(model_id: str) -> list[int] | None:
+def get_eos_token_ids_for_model(model_id: ModelId) -> list[int] | None:
     """
     Get the EOS token IDs for a model based on its ID.
 
@@ -341,6 +313,9 @@ def get_eos_token_ids_for_model(model_id: str) -> list[int] | None:
     model_id_lower = model_id.lower()
     if "kimi-k2" in model_id_lower:
         return [163586]
+    elif "glm-4.7-flash" in model_id_lower:
+        # 154820: <|endoftext|>, 154827: <|user|>, 154829: <|observation|>
+        return [154820, 154827, 154829]
     elif "glm" in model_id_lower:
         return [151336, 151329, 151338]
     elif "gpt-oss" in model_id_lower or "gpt_oss" in model_id_lower:
@@ -350,7 +325,9 @@ def get_eos_token_ids_for_model(model_id: str) -> list[int] | None:
     return None
 
 
-def load_tokenizer_for_model_id(model_id: str, model_path: Path) -> TokenizerWrapper:
+def load_tokenizer_for_model_id(
+    model_id: ModelId, model_path: Path
+) -> TokenizerWrapper:
     """
     Load tokenizer for a model given its ID and local path.
 
@@ -413,14 +390,35 @@ def load_tokenizer_for_model_id(model_id: str, model_path: Path) -> TokenizerWra
     return tokenizer
 
 
+def _normalize_tool_calls(msg_dict: dict[str, Any]) -> None:
+    """
+    Normalize tool_calls in a message dict.
+
+    OpenAI format has tool_calls[].function.arguments as a JSON string,
+    but some chat templates (e.g., GLM) expect it as a dict.
+    """
+    tool_calls = msg_dict.get("tool_calls")
+    if not tool_calls or not isinstance(tool_calls, list):
+        return
+
+    for tc in tool_calls:  # pyright: ignore[reportUnknownVariableType]
+        if not isinstance(tc, dict):
+            continue
+        func = tc.get("function")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if not isinstance(func, dict):
+            continue
+        args = func.get("arguments")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        if isinstance(args, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                func["arguments"] = json.loads(args)
+
+
 def apply_chat_template(
     tokenizer: TokenizerWrapper,
     chat_task_data: ChatCompletionTaskParams,
 ) -> str:
-    # Now we can properly access the messages
     messages = chat_task_data.messages
-    model_id = chat_task_data.model.lower()
-    is_gpt_oss = "gpt-oss" in model_id or "gpt_oss" in model_id
+    tools = chat_task_data.tools
 
     formatted_messages: list[dict[str, Any]] = []
     for message in messages:
@@ -437,178 +435,21 @@ def apply_chat_template(
         if message.content is None and message.thinking is None:
             continue
 
-        # Build message dict manually with only plain Python types
-        # This ensures the Jinja template receives only simple types
-        msg_dict: dict[str, Any] = {
-            "role": message.role,
-        }
+        # Null values are not valid when applying templates in tokenizer
+        dumped: dict[str, Any] = message.model_dump()
+        msg_dict: dict[str, Any] = {k: v for k, v in dumped.items() if v is not None}  # pyright: ignore[reportAny]
 
-        # Add content if present
-        if message.content is not None:
-            msg_dict["content"] = message.content
-
-        # Add thinking if present (GPT-OSS specific)
-        if message.thinking is not None:
-            msg_dict["thinking"] = message.thinking
-
-        # Add optional fields only if they're present
-        if message.name is not None:
-            msg_dict["name"] = message.name
-
-        if message.tool_calls is not None:
-            # Convert tool_calls to plain Python types (in case they're Pydantic models)
-            import json
-            tool_calls_list = []
-            if isinstance(message.tool_calls, list):  # pyright: ignore[reportUnnecessaryIsInstance]
-                for tc in message.tool_calls:
-                    tc_dict = tc.model_dump(mode='python') if hasattr(tc, 'model_dump') else tc  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-
-                    # Qwen3-Coder template expects arguments as dict, not JSON string
-                    # Convert OpenAI format (string) to Qwen format (dict)
-                    if isinstance(tc_dict, dict) and "function" in tc_dict:
-                        func = tc_dict["function"]
-                        if isinstance(func, dict) and "arguments" in func:
-                            args = func["arguments"]
-                            # If arguments is a JSON string, parse it to dict
-                            if isinstance(args, str):
-                                try:
-                                    func["arguments"] = json.loads(args)
-                                except (json.JSONDecodeError, TypeError):
-                                    logger.warning(f"Failed to parse tool_call arguments as JSON: {args}")
-                                    func["arguments"] = {}
-
-                    tool_calls_list.append(tc_dict)
-                msg_dict["tool_calls"] = tool_calls_list
-            else:
-                msg_dict["tool_calls"] = message.tool_calls
-
-        if message.tool_call_id is not None:
-            msg_dict["tool_call_id"] = message.tool_call_id
-
-        if message.function_call is not None:
-            # Convert function_call to plain Python types (in case it's a Pydantic model)
-            import json
-            if hasattr(message.function_call, 'model_dump'):
-                func_call_dict = message.function_call.model_dump(mode='python')  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-            else:
-                func_call_dict = message.function_call
-
-            # Qwen3-Coder template expects arguments as dict, not JSON string
-            if isinstance(func_call_dict, dict) and "arguments" in func_call_dict:
-                args = func_call_dict["arguments"]
-                if isinstance(args, str):
-                    try:
-                        func_call_dict["arguments"] = json.loads(args)
-                    except (json.JSONDecodeError, TypeError):
-                        logger.warning(f"Failed to parse function_call arguments as JSON: {args}")
-                        func_call_dict["arguments"] = {}
-
-            msg_dict["function_call"] = func_call_dict
+        # Parse tool_calls arguments from JSON string to dict for templates that expect dicts
+        _normalize_tool_calls(msg_dict)
 
         formatted_messages.append(msg_dict)
 
-    # Debug: Log the formatted messages to see what we're passing to the template
-    logger.debug(f"Formatted messages for template: {formatted_messages}")
-
-    # Ensure all items are plain dicts with plain Python types
-    import json
-    try:
-        # This will fail if there are non-serializable objects
-        json.dumps(formatted_messages)
-    except (TypeError, ValueError) as e:
-        logger.error(f"Messages contain non-serializable objects: {e}")
-        logger.error(f"Messages: {formatted_messages}")
-        raise
-
-    # Prepare template kwargs - GPT-OSS specific parameters
-    template_kwargs: dict[str, Any] = {
-        "tokenize": False,
-        "add_generation_prompt": True,
-    }
-
-    # Add tools if present - convert to plain Python types
-    if chat_task_data.tools is not None:
-        # Convert tools to plain Python dicts to avoid Pydantic model issues in Jinja2
-        # Use JSON round-trip to ensure all nested objects are plain Python types
-        import json
-        try:
-            tools_json = json.dumps(
-                chat_task_data.tools,
-                default=lambda o: o.model_dump(mode='python') if hasattr(o, 'model_dump') else str(o)  # pyright: ignore[reportAny]
-            )
-            tools_data = json.loads(tools_json)  # pyright: ignore[reportAny]
-
-            # Clean tools for Qwen3-Coder template compatibility
-            for tool in tools_data:  # pyright: ignore[reportAny]
-                if isinstance(tool, dict) and "function" in tool:
-                    func = tool["function"]  # pyright: ignore[reportUnknownVariableType]
-                    if "parameters" in func and isinstance(func["parameters"], dict):  # pyright: ignore[reportUnknownArgumentType]
-                        params = func["parameters"]  # pyright: ignore[reportUnknownVariableType]
-
-                        # Ensure properties is a dict
-                        if "properties" in params:  # pyright: ignore[reportUnknownArgumentType]
-                            if isinstance(params["properties"], list):  # pyright: ignore[reportUnknownArgumentType]
-                                props_dict = {}
-                                for prop in params["properties"]:  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]
-                                    if isinstance(prop, dict) and len(prop) == 1:
-                                        props_dict.update(prop)  # pyright: ignore[reportUnknownArgumentType]
-                                params["properties"] = props_dict  # pyright: ignore[reportUnknownArgumentType]
-                            elif not isinstance(params["properties"], dict):  # pyright: ignore[reportUnknownArgumentType]
-                                logger.warning(f"Tool properties is not a dict: {type(params['properties'])}")  # pyright: ignore[reportUnknownArgumentType]
-                                params["properties"] = {}  # pyright: ignore[reportUnknownArgumentType]
-
-                            # Clean each property - remove additionalProperties that confuse Qwen template
-                            for prop_name, prop_spec in params["properties"].items():  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType,reportUnknownArgumentType]
-                                # Remove additionalProperties from individual properties
-                                # Qwen template iterates over properties and gets confused by this field
-                                if isinstance(prop_spec, dict) and "additionalProperties" in prop_spec:
-                                    logger.debug(f"Removing additionalProperties from {func['name']}.{prop_name}")  # pyright: ignore[reportUnknownArgumentType]
-                                    del prop_spec["additionalProperties"]
-
-                        # Remove top-level additionalProperties from parameters if present
-                        if "additionalProperties" in params:  # pyright: ignore[reportUnknownArgumentType]
-                            logger.debug(f"Removing top-level additionalProperties from {func['name']}")  # pyright: ignore[reportUnknownArgumentType]
-                            del params["additionalProperties"]  # pyright: ignore[reportUnknownArgumentType]
-
-            template_kwargs["tools"] = tools_data
-            logger.debug("Cleaned tools for Qwen template")
-        except (TypeError, ValueError) as e:
-            logger.warning(f"Failed to convert tools to plain Python types: {e}, passing as-is")
-            template_kwargs["tools"] = chat_task_data.tools
-
-    # GPT-OSS specific parameters from tokenizer_config.json
-    if is_gpt_oss:
-        logger.info("Applying GPT-OSS specific chat template parameters")
-        # reasoning_effort: "low", "medium", "high" - affects thinking depth
-        # We can infer this from temperature or use default "medium"
-        if hasattr(chat_task_data, 'temperature') and chat_task_data.temperature is not None:
-            if chat_task_data.temperature < 0.3:
-                template_kwargs["reasoning_effort"] = "low"
-            elif chat_task_data.temperature > 0.7:
-                template_kwargs["reasoning_effort"] = "high"
-            else:
-                template_kwargs["reasoning_effort"] = "medium"
-
-        # builtin_tools: can include "browser" and "python"
-        # Only enable if tools are present
-        if chat_task_data.tools:
-            template_kwargs["builtin_tools"] = []  # Start empty, model will use custom tools
-
-    try:
-        prompt: str = tokenizer.apply_chat_template(  # pyright: ignore[reportAny]
-            formatted_messages,
-            **template_kwargs
-        )
-    except Exception as e:
-        logger.error(f"Failed to apply chat template: {e}")
-        logger.error(f"Model: {chat_task_data.model}")
-
-        # Log messages in detail to debug format issues
-        import json
-        try:
-            logger.error(f"Messages (formatted): {json.dumps(formatted_messages, indent=2)}")
-        except Exception:
-            logger.error(f"Messages (cannot serialize): {formatted_messages}")
+    prompt: str = tokenizer.apply_chat_template(
+        formatted_messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        tools=tools,
+    )
 
         # Log tools in detail to debug format issues
         if "tools" in template_kwargs:
@@ -684,6 +525,16 @@ def apply_chat_template(
         logger.debug(f"Prompt: {prompt}")
 
     return prompt
+
+
+def detect_thinking_prompt_suffix(prompt: str, tokenizer: TokenizerWrapper) -> bool:
+    """
+    Detect if prompt ends with a thinking opening tag that should be
+    prepended to the output stream.
+    """
+    think_token = tokenizer.think_start
+
+    return think_token is not None and prompt.rstrip().endswith(think_token)
 
 
 class NullKVCache(KVCache):

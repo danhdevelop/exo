@@ -11,6 +11,10 @@ from hypercorn.asyncio import serve  # pyright: ignore[reportUnknownVariableType
 from loguru import logger
 from pydantic import BaseModel
 
+from exo.download.impl_shard_downloader import (
+    build_full_shard,
+    exo_shard_downloader,
+)
 from exo.shared.logging import InterceptLogger, logger_setup
 from exo.shared.models.model_cards import MODEL_CARDS, ModelId
 from exo.shared.types.api import ChatCompletionMessage, ChatCompletionTaskParams
@@ -34,11 +38,8 @@ from exo.shared.types.worker.instances import (
 )
 from exo.shared.types.worker.runners import RunnerId, ShardAssignments
 from exo.shared.types.worker.shards import PipelineShardMetadata, TensorShardMetadata
-from exo.utils.channels import MpReceiver, MpSender, mp_channel
-from exo.worker.download.impl_shard_downloader import (
-    build_full_shard,
-    exo_shard_downloader,
-)
+from exo.utils.channels import MpReceiver, MpSender, channel, mp_channel
+from exo.utils.info_gatherer.info_gatherer import GatheredInfo, InfoGatherer
 from exo.worker.runner.bootstrap import entrypoint
 
 
@@ -65,6 +66,7 @@ async def main():
     app = FastAPI()
     app.post("/ring")(ring_backend)
     app.post("/jaccl")(jaccl_backend)
+    app.post("/tb_detection")(tb_detection)
     shutdown = anyio.Event()
     await serve(
         app,  # type: ignore
@@ -74,6 +76,15 @@ async def main():
     await anyio.sleep_forever()
     # gracefully shutdown the api
     shutdown.set()
+
+
+async def tb_detection():
+    send, recv = channel[GatheredInfo]()
+    ig = InfoGatherer(send)
+    with anyio.move_on_after(1):
+        await ig._monitor_system_profiler_thunderbolt_data()  # pyright: ignore[reportPrivateUsage]
+    with recv:
+        return recv.collect()
 
 
 async def assert_downloads():
@@ -124,7 +135,7 @@ def ring_instance(test: Tests, iid: InstanceId, hn: str) -> Instance:
     else:
         raise ValueError(f"{hn} not in {test.devs}")
 
-    meta = MODEL_CARDS[test.model_id].metadata
+    card = MODEL_CARDS[test.model_id]
     instance = MlxRingInstance(
         instance_id=iid,
         ephemeral_port=52416,
@@ -134,15 +145,15 @@ def ring_instance(test: Tests, iid: InstanceId, hn: str) -> Instance:
             node_to_runner={NodeId(host[0]): RunnerId(host[0]) for host in test.devs},
             runner_to_shard={
                 RunnerId(test.devs[i][0]): PipelineShardMetadata(
-                    model_meta=meta,
+                    model_card=card,
                     device_rank=i,
                     world_size=world_size,
-                    start_layer=(meta.n_layers // world_size) * i,
+                    start_layer=(card.n_layers // world_size) * i,
                     end_layer=min(
-                        meta.n_layers, (meta.n_layers // world_size) * (i + 1)
+                        card.n_layers, (card.n_layers // world_size) * (i + 1)
                     ),
-                    n_layers=min(meta.n_layers, (meta.n_layers // world_size) * (i + 1))
-                    - (meta.n_layers // world_size) * i,
+                    n_layers=min(card.n_layers, (card.n_layers // world_size) * (i + 1))
+                    - (card.n_layers // world_size) * i,
                 )
                 for i in range(world_size)
             },
@@ -209,16 +220,16 @@ async def jaccl_backend(test: Tests):
             break
     else:
         raise ValueError(f"{weird_hn} not in {test.devs}")
-    return await execute_test(test, jaccl_instance(test, iid, hn), hn)
+    return await execute_test(test, jaccl_instance(test, iid), hn)
 
 
-def jaccl_instance(test: Tests, iid: InstanceId, hn: str):
-    meta = MODEL_CARDS[test.model_id].metadata
+def jaccl_instance(test: Tests, iid: InstanceId):
+    card = MODEL_CARDS[test.model_id]
     world_size = len(test.devs)
 
     return MlxJacclInstance(
         instance_id=iid,
-        ibv_devices=[[None, "rdma_en3"], ["rdma_en3", None]],
+        jaccl_devices=[[None, "rdma_en3"], ["rdma_en3", None]],
         # rank 0 is always coordinator
         jaccl_coordinators={
             NodeId(host[0]): test.devs[0][1] + ":52416" for host in test.devs
@@ -228,12 +239,12 @@ def jaccl_instance(test: Tests, iid: InstanceId, hn: str):
             node_to_runner={NodeId(host[0]): RunnerId(host[0]) for host in test.devs},
             runner_to_shard={
                 RunnerId(test.devs[i][0]): TensorShardMetadata(
-                    model_meta=meta,
+                    model_card=card,
                     device_rank=i,
                     world_size=world_size,
-                    start_layer=meta.n_layers,
-                    end_layer=meta.n_layers,
-                    n_layers=meta.n_layers,
+                    start_layer=card.n_layers,
+                    end_layer=card.n_layers,
+                    n_layers=card.n_layers,
                 )
                 for i in range(world_size)
             },

@@ -16,9 +16,6 @@ from urllib.parse import urlencode
 from loguru import logger
 from transformers import AutoTokenizer
 
-from exo.shared.models.model_cards import MODEL_CARDS
-from exo.shared.types.memory import Memory
-
 
 class ExoHttpError(RuntimeError):
     def __init__(self, status: int, reason: str, body_preview: str):
@@ -198,14 +195,14 @@ def resolve_model_short_id(client: ExoClient, model_arg: str) -> tuple[str, str]
     data = models.get("data") or []
 
     for m in data:
-        if m.get("id") == model_arg:
-            short_id = str(m["id"])
-            full_id = str(m.get("hugging_face_id") or m["id"])
+        if m.get("name").lower() == model_arg.lower():
+            short_id = str(m["name"])
+            full_id = str(m.get("hugging_face_id") or m["name"])
             return short_id, full_id
 
     for m in data:
         if m.get("hugging_face_id") == model_arg:
-            short_id = str(m["id"])
+            short_id = str(m["name"])
             full_id = str(m["hugging_face_id"])
             return short_id, full_id
 
@@ -376,7 +373,7 @@ def main() -> int:
     short_id, full_model_id = resolve_model_short_id(client, args.model)
 
     previews_resp = client.request_json(
-        "GET", "/instance/previews", params={"model_id": short_id}
+        "GET", "/instance/previews", params={"model_id": full_model_id}
     )
     previews = previews_resp.get("previews") or []
 
@@ -490,17 +487,17 @@ def main() -> int:
                 logger.debug(f"  warmup {i + 1}/{args.warmup} done")
 
             for pp in pp_list:
-                if (
-                    pp * n_nodes > 2048
-                    and "ring" in instance_meta.lower()
-                    and "tensor" in sharding.lower()
-                ):
-                    model_card = MODEL_CARDS[short_id]
-                    if model_card.metadata.storage_size > Memory.from_gb(10):
-                        logger.info(
-                            f"Skipping tensor ring as this is too slow for model of size {model_card.metadata.storage_size} on {n_nodes=}"
-                        )
-                        continue
+                # if (
+                #     pp * n_nodes > 2048
+                #     and "ring" in instance_meta.lower()
+                #     and "tensor" in sharding.lower()
+                # ):
+                #     model_card = MODEL_CARDS[short_id]
+                #     if model_card.metadata.storage_size > Memory.from_gb(10):
+                #         logger.info(
+                #             f"Skipping tensor ring as this is too slow for model of size {model_card.metadata.storage_size} on {n_nodes=}"
+                #         )
+                #         continue
                 for tg in tg_list:
                     runs: list[dict[str, Any]] = []
                     for r in range(args.repeat):

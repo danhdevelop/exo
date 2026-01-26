@@ -1,9 +1,9 @@
 from typing import Callable, Generator, List, cast, get_args
 
 import mlx.core as mx
-from mlx_lm import stream_generate
-# from mlx_lm.models.cache import KVCache  # unused, kept for future
-from mlx_lm.sample_utils import make_sampler, make_logits_processors  # pyright: ignore[reportUnknownVariableType]
+from mlx_lm.generate import stream_generate
+from mlx_lm.models.cache import KVCache
+from mlx_lm.sample_utils import make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 # from exo.engines.mlx.cache import KVPrefixCache
@@ -103,24 +103,18 @@ def mlx_generate(
     model: Model,
     tokenizer: TokenizerWrapper,
     task: ChatCompletionTaskParams,
+    prompt: str,
 ) -> Generator[GenerationResponse]:
     # Ensure that generation stats only contains peak memory for this generation
     mx.reset_peak_memory()
     is_bench: bool = isinstance(task, BenchChatCompletionTaskParams)
 
     # Currently we support chat-completion tasks only.
-    logger.info(f"task_params: {task}")
+    logger.debug(f"task_params: {task}")
 
     if task.seed is not None:
         mx.random.seed(task.seed)
 
-    prompt = apply_chat_template(
-        tokenizer=tokenizer,
-        chat_task_data=task,
-    )
-
-    # Use quantized KV cache (4-bit) for 128K token support with reduced memory
-    # This allows large contexts on 16GB M4 while preventing memory pressure
     caches = make_kv_cache(model=model)
 
     logits_processors: list[Callable[[mx.array, mx.array], mx.array]] = []
