@@ -89,19 +89,20 @@ class ModelCard(CamelCaseModel):
 MODEL_CARDS: dict[str, ModelCard] = {
     # deepseek v3
     "deepseek-coder-v2-lite-instruct-mlx-6bit": ModelCard(
-        short_id="deepseek-coder-v2-lite-instruct-mlx-6bit",
         model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-6bit"),
-        name="DeepSeek Coder (6-bit)",
-        description="""DeepSeek Coder is a large language model trained on the DeepSeek Coder dataset.""",
-        tags=[],
-        metadata=ModelMetadata(
-            model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-6bit"),
-            pretty_name="DeepSeek Coder (6-bit)",
-            storage_size=Memory.from_gb(12.8),
-            n_layers=27,
-            hidden_size=2048,
-            supports_tensor=False,
-        ),
+        storage_size=Memory.from_gb(12.8),
+        n_layers=27,
+        hidden_size=2048,
+        supports_tensor=False,
+        tasks=[ModelTask.TextGeneration],
+    ),
+    "deepseek-coder-v2-lite-instruct-mlx-8bit": ModelCard(
+        model_id=ModelId("mlx-community/DeepSeek-Coder-V2-Lite-Instruct-8bit"),
+        storage_size=Memory.from_gb(15),
+        n_layers=27,
+        hidden_size=2048,
+        supports_tensor=False,
+        tasks=[ModelTask.TextGeneration],
     ),
     "deepseek-v3.1-4bit": ModelCard(
         model_id=ModelId("mlx-community/DeepSeek-V3.1-4bit"),
@@ -234,6 +235,22 @@ MODEL_CARDS: dict[str, ModelCard] = {
         n_layers=28,
         hidden_size=1024,
         supports_tensor=False,
+        tasks=[ModelTask.TextGeneration],
+    ),
+    "qwen3-coder-30b-4bit": ModelCard(
+        model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-4bit"),
+        storage_size=Memory.from_gb(17.2),
+        n_layers=48,
+        hidden_size=2048,
+        supports_tensor=True,
+        tasks=[ModelTask.TextGeneration],
+    ),
+    "qwen3-coder-30b-6bit": ModelCard(
+        model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit"),
+        storage_size=Memory.from_gb(17.8),
+        n_layers=48,
+        hidden_size=2048,
+        supports_tensor=True,
         tasks=[ModelTask.TextGeneration],
     ),
     "qwen3-30b": ModelCard(
@@ -627,6 +644,11 @@ _IMAGE_MODEL_CARDS: dict[str, ModelCard] = {
 
 if EXO_ENABLE_IMAGE_MODELS:
     MODEL_CARDS.update(_IMAGE_MODEL_CARDS)
+
+
+def get_model_cards() -> dict[str, ModelCard]:
+    """Returns the dictionary of available model cards."""
+    return MODEL_CARDS
 
 
 class ConfigData(BaseModel):
