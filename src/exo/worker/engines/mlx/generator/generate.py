@@ -1,10 +1,10 @@
 import time
-from typing import Any, Callable, Generator, cast, get_args
+from typing import Any, Callable, Generator, List, cast, get_args
 
 import mlx.core as mx
 from mlx_lm.generate import stream_generate
 from mlx_lm.models.cache import trim_prompt_cache
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 from exo.shared.types.api import (
