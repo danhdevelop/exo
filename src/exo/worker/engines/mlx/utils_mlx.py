@@ -18,15 +18,12 @@ try:
 except ImportError:
     pass  # transformers < 5.0 or bytes_to_unicode not available
 
-from mlx_lm.models.cache import KVCache, QuantizedKVCache, RotatingKVCache
+from mlx_lm.models.cache import KVCache
 from mlx_lm.models.deepseek_v3 import DeepseekV3Model
-from mlx_lm.models.gpt_oss import Model as GptOssModel
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 from exo.shared.models.model_cards import ModelId
 from exo.worker.engines.mlx.constants import (
-    CACHE_GROUP_SIZE,
-    KV_CACHE_BITS,
     TRUST_REMOTE_CODE,
 )
 
@@ -430,9 +427,11 @@ def apply_chat_template(
                 logger.warning("Received prompt with no content, skipping")
                 continue
             message.content = "\n".join(c.text for c in message.content).strip()
-
-        # Skip messages with no content and no thinking
-        if message.content is None and message.thinking is None:
+        if (
+            message.content is None
+            and message.thinking is None
+            and message.tool_calls is None
+        ):
             continue
 
         # Null values are not valid when applying templates in tokenizer
@@ -451,78 +450,7 @@ def apply_chat_template(
         tools=tools,
     )
 
-        # Log tools in detail to debug format issues
-        if "tools" in template_kwargs:
-            logger.error(f"Tools (formatted): {json.dumps(template_kwargs['tools'], indent=2)}")
-        logger.error(f"Template kwargs keys: {template_kwargs.keys()}")
-
-        # Check for non-dict objects in messages
-        for i, msg in enumerate(formatted_messages):
-            if not isinstance(msg, dict):
-                logger.error(f"Message {i} is not a dict: {type(msg)} = {msg}")
-            elif "content" in msg and msg["content"] is not None:
-                if isinstance(msg["content"], list):
-                    for j, content_item in enumerate(msg["content"]):
-                        if not isinstance(content_item, dict):
-                            logger.error(f"Message {i}, content[{j}] is not a dict: {type(content_item)}")
-                elif not isinstance(msg["content"], str):
-                    logger.error(f"Message {i}, content is neither string nor list: {type(msg['content'])}")
-
-        # Try progressively simpler parameters
-        if chat_task_data.tools is not None:
-            logger.warning("Retrying without tools parameter...")
-            template_kwargs.pop("tools", None)
-            template_kwargs.pop("builtin_tools", None)
-            try:
-                prompt = tokenizer.apply_chat_template(  # pyright: ignore[reportAny]
-                    formatted_messages,
-                    **template_kwargs
-                )
-            except Exception as e2:
-                logger.error(f"Retry without tools failed: {e2}")
-                # Last resort: minimal parameters
-                logger.warning("Retrying with minimal parameters...")
-                try:
-                    prompt = tokenizer.apply_chat_template(
-                        formatted_messages,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                except Exception as e3:
-                    logger.error(f"All retries failed: {e3}")
-                    raise Exception(
-                        f"Chat template failed: {str(e)}. "
-                        f"Message format may be incompatible with this model. "
-                        f"Original error: {str(e)}"
-                    ) from e
-        else:
-            raise Exception(
-                f"Chat template failed: {str(e)}. "
-                f"Message format may be incompatible with this model."
-            ) from e
-
-    # Log the prompt for debugging (especially important for GPT-OSS)
-    if is_gpt_oss:
-        logger.info("="*80)
-        logger.info("GPT-OSS Harmony Format Prompt:")
-        logger.info("="*80)
-        # Check if prompt contains Harmony format tokens
-        if "<|start|>" in prompt:
-            logger.info("✓ Prompt contains <|start|> token (Harmony format detected)")
-        else:
-            logger.warning("✗ Prompt does NOT contain <|start|> token - model may not generate in Harmony format!")
-
-        if "<|channel|>" in prompt:
-            logger.info("✓ Prompt contains <|channel|> token")
-        else:
-            logger.warning("✗ Prompt does NOT contain <|channel|> token")
-
-        # Log the actual prompt
-        logger.info(prompt)
-        logger.info("="*80)
-    else:
-        logger.info(f"Chat template applied successfully for {chat_task_data.model}")
-        logger.debug(f"Prompt: {prompt}")
+    logger.info(prompt)
 
     return prompt
 
@@ -558,31 +486,6 @@ class NullKVCache(KVCache):
     @state.setter
     def state(self, v: tuple[mx.array, mx.array]) -> None:
         raise NotImplementedError("We should not be setting a NullKVCache.")
-
-
-def make_kv_cache(
-    model: Model, max_kv_size: int | None = None, keep: int = 0
-) -> list[KVCache | RotatingKVCache | QuantizedKVCache]:
-    assert hasattr(model, "layers")
-
-    # TODO: Do this for all models
-    if hasattr(model, "make_cache") and isinstance(model, GptOssModel):
-        logger.info("Using MLX LM's make cache")
-        return model.make_cache()  # type: ignore
-
-    if max_kv_size is None:
-        if KV_CACHE_BITS is None:
-            logger.info("Using default KV cache")
-            return [KVCache() for _ in model.layers]
-        else:
-            logger.info("Using quantized KV cache")
-            return [
-                QuantizedKVCache(group_size=CACHE_GROUP_SIZE, bits=KV_CACHE_BITS)
-                for _ in model.layers
-            ]
-    else:
-        logger.info(f"Using rotating KV cache with {max_kv_size=} with {keep=}")
-        return [RotatingKVCache(max_size=max_kv_size, keep=keep) for _ in model.layers]
 
 
 def mlx_force_oom(size: int = 40000) -> None:
