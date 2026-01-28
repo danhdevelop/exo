@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -142,35 +143,38 @@ class DownloadCoordinator:
         ) -> None:
             nonlocal last_progress_time
 
-            if progress.status == "complete":
-                completed = DownloadCompleted(
-                    shard_metadata=callback_shard,
-                    node_id=self.node_id,
-                    total_bytes=progress.total_bytes,
-                )
-                self.download_status[callback_shard.model_card.model_id] = completed
-                await self.event_sender.send(
-                    NodeDownloadProgress(download_progress=completed)
-                )
-                # Clean up active download tracking
-                if callback_shard.model_card.model_id in self.active_downloads:
-                    del self.active_downloads[callback_shard.model_card.model_id]
-            elif (
-                progress.status == "in_progress"
-                and current_time() - last_progress_time > throttle_interval_secs
-            ):
-                ongoing = DownloadOngoing(
-                    node_id=self.node_id,
-                    shard_metadata=callback_shard,
-                    download_progress=map_repo_download_progress_to_download_progress_data(
-                        progress
-                    ),
-                )
-                self.download_status[callback_shard.model_card.model_id] = ongoing
-                await self.event_sender.send(
-                    NodeDownloadProgress(download_progress=ongoing)
-                )
-                last_progress_time = current_time()
+            # Coordinator may be shutting down, receiver side of channel may be closed
+            # Use suppress to silently ignore - download will continue but progress updates will stop
+            with suppress(anyio.BrokenResourceError):
+                if progress.status == "complete":
+                    completed = DownloadCompleted(
+                        shard_metadata=callback_shard,
+                        node_id=self.node_id,
+                        total_bytes=progress.total_bytes,
+                    )
+                    self.download_status[callback_shard.model_card.model_id] = completed
+                    await self.event_sender.send(
+                        NodeDownloadProgress(download_progress=completed)
+                    )
+                    # Clean up active download tracking
+                    if callback_shard.model_card.model_id in self.active_downloads:
+                        del self.active_downloads[callback_shard.model_card.model_id]
+                elif (
+                    progress.status == "in_progress"
+                    and current_time() - last_progress_time > throttle_interval_secs
+                ):
+                    ongoing = DownloadOngoing(
+                        node_id=self.node_id,
+                        shard_metadata=callback_shard,
+                        download_progress=map_repo_download_progress_to_download_progress_data(
+                            progress
+                        ),
+                    )
+                    self.download_status[callback_shard.model_card.model_id] = ongoing
+                    await self.event_sender.send(
+                        NodeDownloadProgress(download_progress=ongoing)
+                    )
+                    last_progress_time = current_time()
 
         self.shard_downloader.on_progress(download_progress_callback)
 
@@ -185,9 +189,11 @@ class DownloadCoordinator:
                     error_message=str(e),
                 )
                 self.download_status[model_id] = failed
-                await self.event_sender.send(
-                    NodeDownloadProgress(download_progress=failed)
-                )
+                # Coordinator may be shutting down, silently ignore BrokenResourceError
+                with suppress(anyio.BrokenResourceError):
+                    await self.event_sender.send(
+                        NodeDownloadProgress(download_progress=failed)
+                    )
             finally:
                 if model_id in self.active_downloads:
                     del self.active_downloads[model_id]
