@@ -15,8 +15,6 @@ from exo.shared.types.worker.shards import (
 
 def register_custom_model(shard: ShardMetadata) -> None:
     """Registers a custom model in MODEL_CARDS and persists it."""
-    load_custom_models_once()
-    
     model_id = shard.model_meta.model_id
     
     # Check if model is already registered
