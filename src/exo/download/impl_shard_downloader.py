@@ -15,22 +15,22 @@ from exo.shared.types.worker.shards import (
 
 def register_custom_model(shard: ShardMetadata) -> None:
     """Registers a custom model in MODEL_CARDS and persists it."""
-    model_id = shard.model_meta.model_id
-    
+    model_id = shard.model_card.model_id
+
     # Check if model is already registered
     if any(c.model_id == model_id for c in MODEL_CARDS.values()):
         return
-    
+
     short_id: str = str(model_id).split("/")[-1]
     logger.debug(f"Registering new model with short_id: {short_id}")
-    
+
     custom_card = ModelCard(
         short_id=short_id,
         model_id=model_id,
         name=short_id,
         description=f"Custom model from {str(model_id).split('/')[0]}",
         tags=["custom"],
-        metadata=shard.model_meta,
+        metadata=shard.model_card.metadata,
     )
     MODEL_CARDS[short_id] = custom_card
     logger.info(f"✓ Registered custom model: {short_id} ({model_id})")
