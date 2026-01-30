@@ -3,7 +3,7 @@ from typing import Callable, Generator, List, cast, get_args
 import mlx.core as mx
 from mlx_lm.generate import stream_generate
 from mlx_lm.models.cache import KVCache
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 # from exo.engines.mlx.cache import KVPrefixCache

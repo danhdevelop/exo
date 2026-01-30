@@ -250,7 +250,7 @@ def patch_pipeline_model[T](model: T, group: mx.distributed.Group) -> T:
 
         # Add dependency to last cache entry to ensure distributed ops are evaluated
         if cache is not None:
-            cache[-1].state = mx.depends(cache[-1].state, logits)  # type: ignore
+            cache[-1].keys = mx.depends(cache[-1].keys, logits)  # type: ignore
 
         logits = mx.distributed.all_gather(logits, group=group)[
             -logits.shape[0] :
@@ -280,7 +280,7 @@ def patch_tensor_model[T](model: T) -> T:
 
         # Add dependency to last cache entry to ensure distributed ops are evaluated
         if cache is not None and len(cache) > 0:  # pyright: ignore[reportAny]
-            cache[-1].state = mx.depends(cache[-1].state, logits)  # pyright: ignore[reportAny,reportUnknownMemberType]
+            cache[-1].keys = mx.depends(cache[-1].keys, logits)  # pyright: ignore[reportAny,reportUnknownMemberType]
 
         return logits
 

@@ -587,9 +587,6 @@ class API:
                     for i, tool in enumerate(chunk.tool_calls)
                 )
 
-            if chunk.tool_calls is not None:
-                tool_calls = chunk.tool_calls
-
             if chunk.finish_reason is not None:
                 finish_reason = chunk.finish_reason
 
@@ -648,9 +645,6 @@ class API:
                 )
 
             stats = chunk.stats or stats
-
-            if chunk.tool_calls is not None:
-                tool_calls = chunk.tool_calls
 
             if chunk.finish_reason is not None:
                 finish_reason = chunk.finish_reason

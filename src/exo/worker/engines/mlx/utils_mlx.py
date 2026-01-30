@@ -451,78 +451,7 @@ def apply_chat_template(
         tools=tools,
     )
 
-        # Log tools in detail to debug format issues
-        if "tools" in template_kwargs:
-            logger.error(f"Tools (formatted): {json.dumps(template_kwargs['tools'], indent=2)}")
-        logger.error(f"Template kwargs keys: {template_kwargs.keys()}")
-
-        # Check for non-dict objects in messages
-        for i, msg in enumerate(formatted_messages):
-            if not isinstance(msg, dict):
-                logger.error(f"Message {i} is not a dict: {type(msg)} = {msg}")
-            elif "content" in msg and msg["content"] is not None:
-                if isinstance(msg["content"], list):
-                    for j, content_item in enumerate(msg["content"]):
-                        if not isinstance(content_item, dict):
-                            logger.error(f"Message {i}, content[{j}] is not a dict: {type(content_item)}")
-                elif not isinstance(msg["content"], str):
-                    logger.error(f"Message {i}, content is neither string nor list: {type(msg['content'])}")
-
-        # Try progressively simpler parameters
-        if chat_task_data.tools is not None:
-            logger.warning("Retrying without tools parameter...")
-            template_kwargs.pop("tools", None)
-            template_kwargs.pop("builtin_tools", None)
-            try:
-                prompt = tokenizer.apply_chat_template(  # pyright: ignore[reportAny]
-                    formatted_messages,
-                    **template_kwargs
-                )
-            except Exception as e2:
-                logger.error(f"Retry without tools failed: {e2}")
-                # Last resort: minimal parameters
-                logger.warning("Retrying with minimal parameters...")
-                try:
-                    prompt = tokenizer.apply_chat_template(
-                        formatted_messages,
-                        tokenize=False,
-                        add_generation_prompt=True,
-                    )
-                except Exception as e3:
-                    logger.error(f"All retries failed: {e3}")
-                    raise Exception(
-                        f"Chat template failed: {str(e)}. "
-                        f"Message format may be incompatible with this model. "
-                        f"Original error: {str(e)}"
-                    ) from e
-        else:
-            raise Exception(
-                f"Chat template failed: {str(e)}. "
-                f"Message format may be incompatible with this model."
-            ) from e
-
-    # Log the prompt for debugging (especially important for GPT-OSS)
-    if is_gpt_oss:
-        logger.info("="*80)
-        logger.info("GPT-OSS Harmony Format Prompt:")
-        logger.info("="*80)
-        # Check if prompt contains Harmony format tokens
-        if "<|start|>" in prompt:
-            logger.info("✓ Prompt contains <|start|> token (Harmony format detected)")
-        else:
-            logger.warning("✗ Prompt does NOT contain <|start|> token - model may not generate in Harmony format!")
-
-        if "<|channel|>" in prompt:
-            logger.info("✓ Prompt contains <|channel|> token")
-        else:
-            logger.warning("✗ Prompt does NOT contain <|channel|> token")
-
-        # Log the actual prompt
-        logger.info(prompt)
-        logger.info("="*80)
-    else:
-        logger.info(f"Chat template applied successfully for {chat_task_data.model}")
-        logger.debug(f"Prompt: {prompt}")
+    logger.info(prompt)
 
     return prompt
 

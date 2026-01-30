@@ -7,6 +7,8 @@ from typing import Any, Callable, Literal
 
 import mlx.core as mx
 from mlx_lm.models.gpt_oss import Model as GptOssModel
+from mlx_lm.models.qwen3_moe import Model as Qwen3MoeModel
+from mlx_lm.models.qwen3_next import Model as Qwen3NextModel
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 from openai_harmony import (  # pyright: ignore[reportMissingTypeStubs]
     HarmonyEncodingName,
@@ -311,7 +313,6 @@ def main(
                                                     token_id=response.token,
                                                     finish_reason=response.finish_reason,
                                                     stats=response.stats,
-                                                    tool_calls=response.tool_calls,
                                                 ),
                                             )
                                         )
@@ -518,9 +519,13 @@ def parse_gpt_oss(
     thinking = False
     current_tool_name: str | None = None
     tool_arg_parts: list[str] = []
+    token_count = 0
+    parser_active = False
+    first_error_logged = False
 
     for response in responses:
         assert isinstance(response, GenerationResponse)
+        token_count += 1
         stream.process(response.token)
 
         delta = stream.last_content_delta
