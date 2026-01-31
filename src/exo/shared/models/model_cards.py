@@ -411,7 +411,7 @@ MODEL_CARDS: dict[str, ModelCard] = {
         tasks=[ModelTask.TextGeneration],
     ),
     "glm-4.7-flash-6bit": ModelCard(
-        model_id=ModelId("mlx-community/GLM-4.7-Flash-6bit"),
+        model_id=ModelId("lmstudio-community/GLM-4.7-Flash-MLX-6bit"),
         storage_size=Memory.from_gb(25),
         n_layers=47,
         hidden_size=2048,

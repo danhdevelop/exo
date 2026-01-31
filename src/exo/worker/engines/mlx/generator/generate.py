@@ -1,4 +1,4 @@
-from typing import Callable, Generator, List, cast, get_args
+from typing import Any, Callable, Generator, List, cast, get_args
 
 import mlx.core as mx
 from mlx_lm.generate import stream_generate
@@ -124,14 +124,18 @@ def mlx_generate(
         logits_processors = [ban_token_ids(eos_ids)]
 
     # Add logit bias and repetition penalty processors
+    # Build kwargs for make_logits_processors, only including non-None values
+    # to allow mlx_lm's defaults to take effect
+    processor_kwargs: dict[str, Any] = {}
+    if task.logit_bias is not None:
+        processor_kwargs['logit_bias'] = {int(k): float(v) for k, v in task.logit_bias.items()}
+    if task.repetition_penalty is not None:
+        processor_kwargs['repetition_penalty'] = task.repetition_penalty
+    if task.repetition_context_size is not None:
+        processor_kwargs['repetition_context_size'] = task.repetition_context_size
+
     additional_processors: List[Callable[[mx.array, mx.array], mx.array]] = make_logits_processors(
-        logit_bias=(
-            {int(k): float(v) for k, v in task.logit_bias.items()}
-            if task.logit_bias is not None
-            else None
-        ),
-        repetition_penalty=task.repetition_penalty,
-        repetition_context_size=task.repetition_context_size,
+        **processor_kwargs
     )
     if additional_processors:
         logits_processors.extend(additional_processors)
