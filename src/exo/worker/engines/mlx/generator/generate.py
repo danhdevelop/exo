@@ -1,10 +1,10 @@
 import time
-from typing import Any, Callable, Generator, cast, get_args
+from typing import Any, Callable, Generator, List, cast, get_args
 
 import mlx.core as mx
 from mlx_lm.generate import stream_generate
 from mlx_lm.models.cache import trim_prompt_cache
-from mlx_lm.sample_utils import make_sampler
+from mlx_lm.sample_utils import make_logits_processors, make_sampler
 from mlx_lm.tokenizer_utils import TokenizerWrapper
 
 from exo.shared.types.api import (
@@ -91,7 +91,6 @@ def prefill(
     return tokens_per_sec, num_tokens
 
 
->>>>>>> upstream/main
 def warmup_inference(
     model: Model,
     tokenizer: TokenizerWrapper,
@@ -252,23 +251,6 @@ def mlx_generate(
     last_token = prompt_tokens[-1:]
 
     max_tokens = task.max_tokens or MAX_TOKENS
-<<<<<<< HEAD
-
-    # Use very small prefill steps to avoid GPU timeout in distributed inference
-    # 512 tokens per step ensures Metal GPU operations complete within timeout
-    # TODO: Dynamically change prefill step size to be the maximum possible without timing out.
-    for out in stream_generate(
-        model=model,
-        tokenizer=tokenizer,
-        prompt=prompt,
-        max_tokens=max_tokens,
-        sampler=sampler,
-        logits_processors=logits_processors,
-        prompt_cache=caches,
-        prefill_step_size=512,
-        kv_group_size=None,  # Cache already configured by make_kv_cache
-        kv_bits=None,  # Cache already configured by make_kv_cache
-=======
     generated_text_parts: list[str] = []
     generation_start_time = time.perf_counter()
     usage: Usage | None = None
@@ -291,7 +273,6 @@ def mlx_generate(
             kv_bits=KV_BITS,
         ),
         start=1,
->>>>>>> upstream/main
     ):
         generated_text_parts.append(out.text)
         logger.info(out.text)
