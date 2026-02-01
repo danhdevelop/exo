@@ -49,6 +49,26 @@ class HuggingFaceAuthenticationError(Exception):
     """Raised when HuggingFace returns 401/403 for a model download."""
 
 
+class HuggingFaceRateLimitError(Exception):
+    """Raised when HuggingFace rate limits the request."""
+
+
+def _is_rate_limited(headers: dict[str, str]) -> bool:
+    """Check if response indicates rate limiting based on headers."""
+    # Check for rate limit headers
+    ratelimit_header = headers.get("ratelimit", "").lower()
+    # Parse "api";r=0;t=123 format - r=0 means no requests remaining
+    if ";r=" in ratelimit_header:
+        try:
+            remaining = ratelimit_header.split(";r=")[1].split(";")[0]
+            if int(remaining) == 0:
+                return True
+        except (ValueError, IndexError):
+            pass
+    # Also check for retry-after header (standard rate limit indicator)
+    return "retry-after" in headers
+
+
 async def _build_auth_error_message(status_code: int, model_id: ModelId) -> str:
     token = await get_hf_token()
     if status_code == 401 and token is None:
@@ -213,6 +233,14 @@ async def _fetch_file_list(
         create_http_session(timeout_profile="short") as session,
         session.get(url, headers=headers) as response,
     ):
+        # Handle rate limiting (429 or 401/403 with rate limit headers)
+        if response.status == 429 or (
+            response.status in [401, 403] and _is_rate_limited(dict(response.headers))
+        ):
+            retry_after = response.headers.get("retry-after", "60")
+            raise HuggingFaceRateLimitError(
+                f"Rate limited by HuggingFace for {model_id}. Retry after {retry_after} seconds."
+            )
         if response.status in [401, 403]:
             msg = await _build_auth_error_message(response.status, model_id)
             raise HuggingFaceAuthenticationError(msg)
@@ -305,6 +333,14 @@ async def file_meta(
             # Otherwise, follow the redirect to get authoritative size/hash
             redirected_location = r.headers.get("location")
             return await file_meta(model_id, revision, path, redirected_location)
+        # Handle rate limiting (429 or 401/403 with rate limit headers)
+        if r.status == 429 or (
+            r.status in [401, 403] and _is_rate_limited(dict(r.headers))
+        ):
+            retry_after = r.headers.get("retry-after", "60")
+            raise HuggingFaceRateLimitError(
+                f"Rate limited by HuggingFace for {model_id}. Retry after {retry_after} seconds."
+            )
         if r.status in [401, 403]:
             msg = await _build_auth_error_message(r.status, model_id)
             raise HuggingFaceAuthenticationError(msg)
@@ -396,6 +432,14 @@ async def _download_file(
         ):
             if r.status == 404:
                 raise FileNotFoundError(f"File not found: {url}")
+            # Handle rate limiting (429 or 401/403 with rate limit headers)
+            if r.status == 429 or (
+                r.status in [401, 403] and _is_rate_limited(dict(r.headers))
+            ):
+                retry_after = r.headers.get("retry-after", "60")
+                raise HuggingFaceRateLimitError(
+                    f"Rate limited by HuggingFace for {model_id}. Retry after {retry_after} seconds."
+                )
             if r.status in [401, 403]:
                 msg = await _build_auth_error_message(r.status, model_id)
                 raise HuggingFaceAuthenticationError(msg)

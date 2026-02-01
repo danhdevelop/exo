@@ -572,7 +572,7 @@ class GLM4MoeLiteShardingStrategy(TensorParallelShardingStrategy):
             sh = self.group.rank() * num_heads
             eh = sh + num_heads
 
-            def shard_heads(w: mx.array, sh: int = sh, eh: int = eh) -> mx.array:
+            def shard_heads(w: mx.array) -> mx.array:
                 return w[sh:eh]
 
             layer.self_attn.embed_q.apply(shard_heads)
