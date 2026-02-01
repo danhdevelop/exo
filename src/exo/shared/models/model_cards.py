@@ -67,9 +67,14 @@ class ModelCard(CamelCaseModel):
 
     @staticmethod
     async def load(model_id: ModelId) -> "ModelCard":
+        # Check if this is a short name in MODEL_CARDS
+        if model_id in MODEL_CARDS:
+            return MODEL_CARDS[model_id]
+        # Also check if this is a full model_id that matches one of the cards
         for card in MODEL_CARDS.values():
             if card.model_id == model_id:
                 return card
+        # Not found in predefined cards, try to load from HuggingFace
         return await ModelCard.from_hf(model_id)
 
     @staticmethod
