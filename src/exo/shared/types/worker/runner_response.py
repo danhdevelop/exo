@@ -6,6 +6,7 @@ from exo.shared.types.api import (
     GenerationStats,
     ImageGenerationStats,
     ToolCallItem,
+    Usage,
 )
 from exo.utils.pydantic_ext import TaggedModel
 
@@ -25,6 +26,7 @@ class GenerationResponse(BaseRunnerResponse):
     finish_reason: FinishReason | None = None
     stats: GenerationStats | None = None
     tool_calls: list[dict[str, Any]] | None = None
+    usage: Usage | None
 
 
 class ImageGenerationResponse(BaseRunnerResponse):
@@ -58,6 +60,7 @@ class PartialImageResponse(BaseRunnerResponse):
 
 class ToolCallResponse(BaseRunnerResponse):
     tool_calls: list[ToolCallItem]
+    usage: Usage | None
 
 
 class FinishedResponse(BaseRunnerResponse):
