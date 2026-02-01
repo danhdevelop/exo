@@ -44,10 +44,28 @@ class Node:
 
     @classmethod
     async def create(cls, args: "Args") -> "Self":
+        from exo.utils.network import get_thunderbolt_interface_ip
+
         keypair = get_node_id_keypair()
         node_id = NodeId(keypair.to_peer_id().to_base58())
         session_id = SessionId(master_node_id=node_id, election_clock=0)
-        router = Router.create(keypair)
+
+        # Auto-detect Thunderbolt interface for P2P traffic
+        thunderbolt_ip = None
+        if args.p2p_interface is None:  # Only auto-detect if not manually specified
+            thunderbolt_ip = await get_thunderbolt_interface_ip()
+            if thunderbolt_ip:
+                logger.info(f"Auto-detected Thunderbolt interface at {thunderbolt_ip}")
+            else:
+                logger.info("No Thunderbolt interface detected, using all interfaces")
+        else:
+            thunderbolt_ip = args.p2p_interface
+            logger.info(f"Using manually specified P2P interface: {thunderbolt_ip}")
+
+        # Convert IP to multiaddr format if Thunderbolt detected
+        bind_address = f"/ip4/{thunderbolt_ip}/tcp/0" if thunderbolt_ip else None
+
+        router = Router.create(keypair, bind_address=bind_address)
         await router.register_topic(topics.GLOBAL_EVENTS)
         await router.register_topic(topics.LOCAL_EVENTS)
         await router.register_topic(topics.COMMANDS)
@@ -285,6 +303,7 @@ class Args(CamelCaseModel):
     no_worker: bool = False
     no_downloads: bool = False
     fast_synch: bool | None = None  # None = auto, True = force on, False = force off
+    p2p_interface: str | None = None  # Override auto-detection, specify IP for P2P binding
 
     @classmethod
     def parse(cls) -> Self:
@@ -344,6 +363,13 @@ class Args(CamelCaseModel):
             action="store_false",
             dest="fast_synch",
             help="Force MLX FAST_SYNCH off",
+        )
+        parser.add_argument(
+            "--p2p-interface",
+            type=str,
+            dest="p2p_interface",
+            default=None,
+            help="Override auto-detection and bind P2P traffic to specific IP address (e.g., 192.168.2.10)",
         )
 
         args = parser.parse_args()

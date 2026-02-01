@@ -343,7 +343,10 @@ impl PyNetworkingHandle {
     // ---- Lifecycle management methods ----
 
     #[new]
-    fn py_new(identity: Bound<'_, PyKeypair>) -> PyResult<Self> {
+    fn py_new(
+        identity: Bound<'_, PyKeypair>,
+        bind_address: Option<String>,
+    ) -> PyResult<Self> {
         use pyo3_async_runtimes::tokio::get_runtime;
 
         // create communication channels
@@ -356,7 +359,7 @@ impl PyNetworkingHandle {
 
         // create networking swarm (within tokio context!! or it crashes)
         let swarm = get_runtime()
-            .block_on(async { create_swarm(identity) })
+            .block_on(async { create_swarm(identity, bind_address.as_deref()) })
             .pyerr()?;
 
         // spawn tokio task running the networking logic

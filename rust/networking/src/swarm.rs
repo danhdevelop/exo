@@ -16,15 +16,19 @@ pub const NETWORK_VERSION: &[u8] = b"v0.0.1";
 pub const OVERRIDE_VERSION_ENV_VAR: &str = "EXO_LIBP2P_NAMESPACE";
 
 /// Create and configure a swarm which listens to all ports on OS
-pub fn create_swarm(keypair: identity::Keypair) -> alias::AnyResult<Swarm> {
+pub fn create_swarm(
+    keypair: identity::Keypair,
+    bind_address: Option<&str>,
+) -> alias::AnyResult<Swarm> {
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_other_transport(tcp_transport)?
         .with_behaviour(Behaviour::new)?
         .build();
 
-    // Listen on all interfaces and whatever port the OS assigns
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    // Use provided bind address or default to all interfaces
+    let listen_addr = bind_address.unwrap_or("/ip4/0.0.0.0/tcp/0").parse()?;
+    swarm.listen_on(listen_addr)?;
     Ok(swarm)
 }
 
