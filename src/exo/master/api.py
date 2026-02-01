@@ -621,7 +621,7 @@ class API:
         )
 
     async def _collect_chat_completion_with_stats(
-        self, command_id: CommandId, model: str
+        self, command_id: CommandId
     ) -> BenchChatCompletionResponse:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
@@ -637,8 +637,8 @@ class API:
                     detail=chunk.error_message or "Internal server error",
                 )
 
-            if model_id is None:
-                model_id = chunk.model
+            if model is None:
+                model = chunk.model
 
             if isinstance(chunk, TokenChunk):
                 text_parts.append(chunk.text)
@@ -659,7 +659,7 @@ class API:
                 finish_reason = chunk.finish_reason
 
         combined_text = "".join(text_parts)
-        assert model_id is not None
+        assert model is not None
 
         # Parse complete output with model-specific adapter
         message = ChatCompletionMessage(
@@ -668,13 +668,13 @@ class API:
             tool_calls=tool_calls,
         )
         message = enrich_chat_message_with_parsing(
-            message, ModelId(model_id), combined_text
+            message, model, combined_text
         )
 
         resp = BenchChatCompletionResponse(
             id=command_id,
             created=int(time.time()),
-            model=model_id,
+            model=model,
             choices=[
                 ChatCompletionChoice(
                     index=0,
@@ -746,13 +746,10 @@ class API:
 
         payload.stream = False
 
-        # Adapt parameters for model-specific requirements
-        payload = adapt_chat_completion_request(payload)
-
         command = ChatCompletion(request_params=payload)
         await self._send(command)
 
-        response = await self._collect_chat_completion_with_stats(command.command_id, payload.model)
+        response = await self._collect_chat_completion_with_stats(command.command_id)
         return response
 
     async def _validate_image_model(self, model: ModelId) -> ModelId:
