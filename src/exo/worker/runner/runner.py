@@ -259,6 +259,10 @@ def main(
                         elif "glm" in shard_metadata.model_card.model_id.lower():
                             patch_glm_tokenizer(tokenizer)
 
+                        # Qwen models need XML tool call parser
+                        elif "qwen" in shard_metadata.model_card.model_id.lower():
+                            patch_qwen_tokenizer(tokenizer)
+
                         # GPT-OSS specific parsing to match other model formats.
                         elif isinstance(model, GptOssModel):
                             mlx_generator = parse_gpt_oss(mlx_generator)
@@ -880,6 +884,27 @@ def patch_glm_tokenizer(tokenizer: TokenizerWrapper):
     tokenizer._tool_parser = parse_tool_call
 
 
+def patch_qwen_tokenizer(tokenizer: TokenizerWrapper):
+    """
+    Patch Qwen tokenizer to use the qwen3_coder XML tool parser.
+    Qwen models generate tool calls in XML format like:
+    <tool_call>
+    <function=name>
+    <parameter=arg1>value1</parameter>
+    </function>
+    </tool_call>
+    """
+    from mlx_lm.tool_parsers.qwen3_coder import (
+        parse_tool_call,
+        tool_call_end,
+        tool_call_start,
+    )
+
+    tokenizer._tool_call_start = tool_call_start
+    tokenizer._tool_call_end = tool_call_end
+    tokenizer._tool_parser = parse_tool_call
+
+
 def _validate_single_tool(obj: dict[str, Any]) -> ToolCallItem:
     if (
         ((name := obj.get("name")) is not None)
@@ -928,6 +953,8 @@ def parse_qwen_tool_calls(
     This parser detects these XML tags, extracts the tool call information,
     and converts to OpenAI-compatible format.
     """
+    import regex as re
+
     accumulated_text = ""
     tool_calls: list[dict[str, Any]] = []
     tool_call_buffer = ""
@@ -1020,6 +1047,8 @@ def _parse_qwen_xml_tool_call(content: str, call_index: int) -> dict[str, Any] |
 
     Returns OpenAI-compatible tool call dict or None if parsing fails.
     """
+    import regex as re
+
     # Extract function name from <function=name> tag
     function_match = re.search(r"<function=([^>]+)>", content)
     if not function_match:

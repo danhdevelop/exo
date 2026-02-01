@@ -594,7 +594,6 @@ class API:
         tool_calls: list[ToolCall] = []
         model_id: str | None = None
         finish_reason: FinishReason | None = None
-        tool_calls = None
 
         async for chunk in self._chat_chunk_stream(command_id):
             if isinstance(chunk, ErrorChunk):
@@ -655,7 +654,6 @@ class API:
         tool_calls: list[ToolCall] = []
         model_id: str | None = None
         finish_reason: FinishReason | None = None
-        tool_calls = None
 
         stats: GenerationStats | None = None
 
