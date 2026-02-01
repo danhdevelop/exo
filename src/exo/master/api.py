@@ -24,7 +24,6 @@ from exo.master.placement import place_instance as get_instance_placements
 from exo.shared.adapters.integration import (
     adapt_chat_completion_request,
     enrich_chat_message_with_parsing,
-    parse_token_chunk_with_adapter,
 )
 from exo.shared.apply import apply
 from exo.shared.constants import (
@@ -523,17 +522,10 @@ class API:
                 del self._chat_completion_queues[command_id]
 
     async def _generate_chat_stream(
-<<<<<<< HEAD
-        self, command_id: CommandId, model: str
-    ) -> AsyncGenerator[str, None]:
-        """Generate chat completion stream as JSON strings."""
-        accumulated_text = ""
-=======
         self, command_id: CommandId, stream_options: StreamOptions | None = None
     ) -> AsyncGenerator[str, None]:
         """Generate chat completion stream as JSON strings."""
         include_usage = stream_options.include_usage if stream_options else False
->>>>>>> upstream/main
 
         async for chunk in self._chat_chunk_stream(command_id):
             assert not isinstance(chunk, ImageChunk)
@@ -549,43 +541,11 @@ class API:
                 yield "data: [DONE]\n\n"
                 return
 
-<<<<<<< HEAD
-            # Parse chunk with model-specific adapter for thinking/special formats
-            if isinstance(chunk, TokenChunk):
-                parsed = parse_token_chunk_with_adapter(chunk, accumulated_text)
-                accumulated_text += chunk.text
-
-                # Create message with parsed content
-                delta_message = ChatCompletionMessage(
-                    role="assistant",
-                    content=parsed.content,
-                    thinking=parsed.thinking,
-                    tool_calls=parsed.tool_calls,
-                )
-
-                chunk_response = ChatCompletionResponse(
-                    id=command_id,
-                    created=int(time.time()),
-                    model=chunk.model,
-                    choices=[
-                        StreamingChoiceResponse(
-                            index=0,
-                            delta=delta_message,
-                            finish_reason=parsed.finish_reason or chunk.finish_reason,
-                        )
-                    ],
-                )
-            else:
-                # Tool call chunk - use existing logic
-                chunk_response = chunk_to_response(chunk, command_id)
-
-=======
             usage = chunk.usage if include_usage else None
 
             chunk_response: ChatCompletionResponse = chunk_to_response(
                 chunk, command_id, usage=usage
             )
->>>>>>> upstream/main
             logger.debug(f"chunk_response: {chunk_response}")
 
             yield f"data: {chunk_response.model_dump_json()}\n\n"
@@ -665,11 +625,7 @@ class API:
     ) -> BenchChatCompletionResponse:
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-<<<<<<< HEAD
-        model_id: str | None = None
-=======
         model: ModelId | None = None
->>>>>>> upstream/main
         finish_reason: FinishReason | None = None
 
         stats: GenerationStats | None = None
@@ -760,11 +716,7 @@ class API:
         await self._send(command)
         if payload.stream:
             return StreamingResponse(
-<<<<<<< HEAD
-                self._generate_chat_stream(command.command_id, payload.model),
-=======
                 self._generate_chat_stream(command.command_id, payload.stream_options),
->>>>>>> upstream/main
                 media_type="text/event-stream",
             )
 
