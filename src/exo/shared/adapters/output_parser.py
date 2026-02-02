@@ -10,6 +10,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
@@ -200,7 +201,8 @@ class BaseOutputParser(ABC):
             # Handle different tool call formats
             tool_id = tc.get("id")
             if tool_id is None or not isinstance(tool_id, str):
-                tool_id = f"call_{idx}"
+                # Generate UUID for missing/invalid IDs (OpenAI protocol compliance)
+                tool_id = str(uuid4())
 
             tool_type_raw: Any = tc.get("type", "function")  # type: ignore[reportAny]
             # Only support "function" type for now

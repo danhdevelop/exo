@@ -9,6 +9,7 @@ Handles Qwen's output format including:
 
 import json
 import re
+from uuid import uuid4
 
 from loguru import logger
 
@@ -126,7 +127,8 @@ class QwenOutputParser(ThinkingOutputParser):
         normalized = []
 
         for idx, tc in enumerate(tool_calls):
-            tool_id = tc.get("id", f"call_{idx}")
+            # Generate UUID for missing IDs (OpenAI protocol compliance)
+            tool_id = tc.get("id", str(uuid4()))
             function_data = tc.get("function", {})
 
             if isinstance(function_data, dict):
