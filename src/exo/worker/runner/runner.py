@@ -172,7 +172,8 @@ def main(
                         logger.info(
                             f"model has_tool_calling={tokenizer.has_tool_calling}"
                         )
-                        kv_prefix_cache = KVPrefixCache(tokenizer, group)
+                        model_id = bound_instance.bound_shard.model_card.model_id
+                        kv_prefix_cache = KVPrefixCache(tokenizer, group, model_id=model_id)
 
                     elif (
                         ModelTask.TextToImage in shard_metadata.model_card.tasks

@@ -19,6 +19,63 @@ from exo.worker.engines.mlx import Model
 from exo.worker.engines.mlx.constants import CACHE_GROUP_SIZE, KV_CACHE_BITS
 from exo.worker.runner.bootstrap import logger
 
+
+def get_model_quantization_bits(model: Model, model_id: str | None = None) -> int | None:
+    """
+    Detect the quantization bit-width for KV cache based on model configuration.
+
+    Returns:
+        Quantization bits (4, 8, etc.) or None for no quantization (FP16/BF16)
+
+    Priority:
+        1. Model's quantization config (if available)
+        2. Model ID/name hints ("4bit", "8bit", etc.)
+        3. Environment variable override (EXO_KV_CACHE_BITS)
+        4. Default fallback (4-bit for memory efficiency)
+    """
+    # Check environment variable override first
+    env_bits = os.environ.get("EXO_KV_CACHE_BITS")
+    if env_bits:
+        try:
+            bits = int(env_bits)
+            logger.info(f"Using KV cache quantization from env: {bits}-bit")
+            return bits if bits > 0 else None
+        except ValueError:
+            pass
+
+    # Check model's quantization config
+    if hasattr(model, "config"):
+        config = model.config
+        if hasattr(config, "quantization_config"):
+            quant_config = config.quantization_config
+            if hasattr(quant_config, "bits"):
+                bits = quant_config.bits
+                logger.info(f"Detected model quantization from config: {bits}-bit")
+                return bits
+
+    # Parse model ID/name for quantization hints
+    if model_id:
+        model_id_lower = model_id.lower()
+        if "4bit" in model_id_lower or "4-bit" in model_id_lower or "-4b" in model_id_lower:
+            logger.info(f"Detected 4-bit quantization from model ID: {model_id}")
+            return 4
+        elif "8bit" in model_id_lower or "8-bit" in model_id_lower or "-8b" in model_id_lower:
+            logger.info(f"Detected 8-bit quantization from model ID: {model_id}")
+            return 8
+        elif "6bit" in model_id_lower or "6-bit" in model_id_lower or "-6b" in model_id_lower:
+            logger.info(f"Detected 6-bit quantization from model ID: {model_id}")
+            return 6
+        elif "3bit" in model_id_lower or "3-bit" in model_id_lower or "-3b" in model_id_lower:
+            logger.info(f"Detected 3-bit quantization from model ID: {model_id}")
+            return 3
+        elif "fp16" in model_id_lower or "bf16" in model_id_lower or "float16" in model_id_lower:
+            logger.info(f"Detected FP16/BF16 from model ID: {model_id} - using no quantization")
+            return None
+
+    # Default fallback: Use 4-bit for memory efficiency (supports 128K contexts on 16GB)
+    logger.info(f"Using default 4-bit KV cache quantization for memory efficiency")
+    return KV_CACHE_BITS or 4
+
 # Fraction of device memory above which LRU eviction kicks in
 _DEFAULT_MEMORY_THRESHOLD = 0.9
 _MEMORY_THRESHOLD = float(
@@ -28,7 +85,10 @@ _MEMORY_THRESHOLD = float(
 
 class KVPrefixCache:
     def __init__(
-        self, tokenizer: TokenizerWrapper, group: mx.distributed.Group | None = None
+        self,
+        tokenizer: TokenizerWrapper,
+        group: mx.distributed.Group | None = None,
+        model_id: str | None = None,
     ):
         self.prompts: list[mx.array] = []  # mx array of tokens (ints)
         self.caches: list[KVCacheType] = []
@@ -36,6 +96,7 @@ class KVPrefixCache:
         self._access_counter: int = 0
         self._tokenizer: TokenizerWrapper = tokenizer
         self._group = group
+        self._model_id = model_id
 
     def clear(self):
         """Clear all cached prompts and caches."""
@@ -125,7 +186,7 @@ class KVPrefixCache:
             return prompt_cache, remaining_tokens, best_snapshot_index
 
         else:
-            prompt_cache = make_kv_cache(model)
+            prompt_cache = make_kv_cache(model, model_id=self._model_id)
             if len(self.prompts) == 0:
                 logger.info(f"KV cache empty, need to prefill {max_length} tokens")
             else:
@@ -210,7 +271,7 @@ def get_memory_used_percentage() -> float:
 
 
 def make_kv_cache(
-    model: Model, max_kv_size: int | None = None, keep: int = 0
+    model: Model, max_kv_size: int | None = None, keep: int = 0, model_id: str | None = None
 ) -> KVCacheType:
     assert hasattr(model, "layers")
 
@@ -220,13 +281,16 @@ def make_kv_cache(
         return model.make_cache()  # type: ignore
 
     if max_kv_size is None:
-        if KV_CACHE_BITS is None:
-            logger.info("Using default KV cache")
+        # Dynamically detect quantization settings from model
+        kv_bits = get_model_quantization_bits(model, model_id)
+
+        if kv_bits is None:
+            logger.info("Using default KV cache (no quantization)")
             return [KVCache() for _ in model.layers]
         else:
-            logger.info("Using quantized KV cache")
+            logger.info(f"Using quantized KV cache with {kv_bits}-bit precision")
             return [
-                QuantizedKVCache(group_size=CACHE_GROUP_SIZE, bits=KV_CACHE_BITS)
+                QuantizedKVCache(group_size=CACHE_GROUP_SIZE, bits=kv_bits)
                 for _ in model.layers
             ]
     else:

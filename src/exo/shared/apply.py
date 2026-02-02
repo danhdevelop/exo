@@ -375,6 +375,6 @@ def apply_node_p2p_bind_updated(event: NodeP2PBindUpdated, state: State) -> Stat
     """Update node's P2P bind information in state."""
     return state.model_copy(
         update={
-            "node_p2p_bind": state.node_p2p_bind | {event.node_id: event.p2p_bind_info}
+            "node_p2p_bind": {**state.node_p2p_bind, event.node_id: event.p2p_bind_info}
         }
     )

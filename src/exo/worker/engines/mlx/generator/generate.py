@@ -23,7 +23,12 @@ from exo.shared.types.worker.runner_response import (
     GenerationResponse,
 )
 from exo.worker.engines.mlx import Model
-from exo.worker.engines.mlx.cache import KVPrefixCache, encode_prompt, make_kv_cache
+from exo.worker.engines.mlx.cache import (
+    KVPrefixCache,
+    encode_prompt,
+    get_model_quantization_bits,
+    make_kv_cache,
+)
 from exo.worker.engines.mlx.constants import KV_BITS, KV_GROUP_SIZE, MAX_TOKENS
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
@@ -42,6 +47,7 @@ def prefill(
     sampler: Callable[[mx.array], mx.array],
     prompt_tokens: mx.array,
     cache: KVCacheType,
+    model_id: str | None = None,
 ) -> tuple[float, int]:
     """Prefill the KV cache with prompt tokens.
 
@@ -65,6 +71,9 @@ def prefill(
             f"Prefill progress: {processed}/{total} tokens ({tok_per_sec:.1f} tok/s)"
         )
 
+    # Dynamically detect quantization from model
+    kv_bits = get_model_quantization_bits(model, model_id)
+
     # Use max_tokens=1 because max_tokens=0 does not work.
     # We just throw away the generated token - we only care about filling the cache
     for _ in stream_generate(
@@ -74,9 +83,9 @@ def prefill(
         max_tokens=1,
         sampler=sampler,
         prompt_cache=cache,
-        prefill_step_size=2048,
+        prefill_step_size=512,  # Small steps to avoid GPU timeout on distributed inference
         kv_group_size=KV_GROUP_SIZE,
-        kv_bits=KV_BITS,
+        kv_bits=kv_bits,
         prompt_progress_callback=progress_callback,
     ):
         break  # Stop after first iteration - cache is now filled
@@ -186,8 +195,9 @@ def mlx_generate(
     # Use prefix cache if available, otherwise create fresh cache
     prefix_hit_length = 0
     matched_index: int | None = None
+    model_id = task.model
     if kv_prefix_cache is None:
-        caches = make_kv_cache(model=model)
+        caches = make_kv_cache(model=model, model_id=model_id)
         prompt_tokens = encode_prompt(tokenizer, prompt)
     else:
         caches, prompt_tokens, matched_index = kv_prefix_cache.get_kv_cache(
@@ -242,9 +252,15 @@ def mlx_generate(
         sampler_kwargs['xtc_special_tokens'] = task.xtc_special_tokens
     sampler = make_sampler(**sampler_kwargs)
 
+    # Get model ID for adaptive quantization
+    model_id = task.model
+
+    # Dynamically detect quantization from model
+    kv_bits = get_model_quantization_bits(model, model_id)
+
     # Prefill cache with all tokens except the last one
     prefill_tps, prefill_tokens = prefill(
-        model, tokenizer, sampler, prompt_tokens[:-1], caches
+        model, tokenizer, sampler, prompt_tokens[:-1], caches, model_id=model_id
     )
 
     # stream_generate starts from the last token
@@ -267,10 +283,10 @@ def mlx_generate(
             sampler=sampler,
             logits_processors=logits_processors,
             prompt_cache=caches,
-            # TODO: Dynamically change prefill step size to be the maximum possible without timing out.
-            prefill_step_size=2048,
+            # Small prefill step size (512) prevents GPU timeout on distributed inference with large contexts
+            prefill_step_size=512,
             kv_group_size=KV_GROUP_SIZE,
-            kv_bits=KV_BITS,
+            kv_bits=kv_bits,
         ),
         start=1,
     ):
