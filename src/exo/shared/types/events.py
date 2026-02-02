@@ -5,6 +5,7 @@ from pydantic import Field
 from exo.shared.topology import Connection
 from exo.shared.types.chunks import GenerationChunk, InputImageChunk
 from exo.shared.types.common import CommandId, Id, NodeId, SessionId
+from exo.shared.types.profiling import NodeP2PBindInfo
 from exo.shared.types.tasks import Task, TaskId, TaskStatus
 from exo.shared.types.worker.downloads import DownloadProgress
 from exo.shared.types.worker.instances import Instance, InstanceId
@@ -109,6 +110,13 @@ class TopologyEdgeDeleted(BaseEvent):
     conn: Connection
 
 
+class NodeP2PBindUpdated(BaseEvent):
+    """Event when node's P2P bind information is updated."""
+
+    node_id: NodeId
+    p2p_bind_info: NodeP2PBindInfo
+
+
 Event = (
     TestEvent
     | TaskCreated
@@ -127,6 +135,7 @@ Event = (
     | InputChunkReceived
     | TopologyEdgeCreated
     | TopologyEdgeDeleted
+    | NodeP2PBindUpdated
 )
 
 

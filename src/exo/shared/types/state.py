@@ -11,6 +11,7 @@ from exo.shared.types.profiling import (
     MemoryUsage,
     NodeIdentity,
     NodeNetworkInfo,
+    NodeP2PBindInfo,
     NodeThunderboltInfo,
     SystemPerformanceProfile,
     ThunderboltBridgeStatus,
@@ -53,6 +54,7 @@ class State(CamelCaseModel):
     node_network: Mapping[NodeId, NodeNetworkInfo] = {}
     node_thunderbolt: Mapping[NodeId, NodeThunderboltInfo] = {}
     node_thunderbolt_bridge: Mapping[NodeId, ThunderboltBridgeStatus] = {}
+    node_p2p_bind: Mapping[NodeId, NodeP2PBindInfo] = {}
 
     # Detected cycles where all nodes have Thunderbolt bridge enabled (>2 nodes)
     thunderbolt_bridge_cycles: Sequence[Sequence[NodeId]] = []

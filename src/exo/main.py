@@ -22,6 +22,8 @@ from exo.shared.constants import EXO_LOG
 from exo.shared.election import Election, ElectionResult
 from exo.shared.logging import logger_cleanup, logger_setup
 from exo.shared.types.common import NodeId, SessionId
+from exo.shared.types.events import ForwarderEvent, NodeP2PBindUpdated
+from exo.shared.types.profiling import NodeP2PBindInfo
 from exo.utils.channels import Receiver, channel
 from exo.utils.pydantic_ext import CamelCaseModel
 from exo.worker.main import Worker
@@ -114,6 +116,28 @@ class Node:
                 command_sender=router.sender(topics.COMMANDS),
                 download_command_sender=router.sender(topics.DOWNLOAD_COMMANDS),
                 event_index_counter=event_index_counter,
+            )
+
+            # Send P2P bind info event
+            # Determine interface type by checking if we detected Thunderbolt
+            interface_type = "thunderbolt" if thunderbolt_ip else None
+
+            p2p_bind_info = NodeP2PBindInfo(
+                bind_address=bind_address or "/ip4/0.0.0.0/tcp/0",
+                interface_ip=thunderbolt_ip,
+                interface_type=interface_type,
+            )
+
+            local_event_sender = router.sender(topics.LOCAL_EVENTS)
+            await local_event_sender.send(
+                ForwarderEvent(
+                    origin_idx=next(event_index_counter),
+                    origin=node_id,
+                    session=session_id,
+                    event=NodeP2PBindUpdated(
+                        node_id=node_id, p2p_bind_info=p2p_bind_info
+                    ),
+                )
             )
         else:
             worker = None

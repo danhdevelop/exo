@@ -400,6 +400,63 @@
           .attr("marker-end", "url(#arrowhead)");
       }
 
+      // Add P2P interface indicator at line midpoint
+      const sourceNodeId = entry.aToB ? entry.a : entry.b;
+      const sourceNode = nodes[sourceNodeId];
+      const p2pInfo = sourceNode?.p2p_bind_info;
+
+      if (p2pInfo) {
+        let icon = "";
+        let iconColor = "rgba(179,179,179,0.9)";
+        let bgColor = "rgba(20,20,20,0.9)";
+
+        if (p2pInfo.interface_type === "thunderbolt") {
+          icon = "⚡";
+          iconColor = "rgba(255,215,0,1)";
+          bgColor = "rgba(80,60,0,0.95)";
+        } else if (p2pInfo.interface_type === "wifi") {
+          icon = "📶";
+          iconColor = "rgba(100,150,255,1)";
+          bgColor = "rgba(20,30,60,0.95)";
+        } else if (p2pInfo.interface_type === "ethernet" || p2pInfo.interface_type === "maybe_ethernet") {
+          icon = "🔌";
+          iconColor = "rgba(100,200,150,1)";
+          bgColor = "rgba(20,50,40,0.95)";
+        } else if (p2pInfo.interface_ip) {
+          icon = "🌐";
+          iconColor = "rgba(150,150,150,1)";
+          bgColor = "rgba(40,40,40,0.95)";
+        } else {
+          icon = "🌐";
+          iconColor = "rgba(120,120,120,0.8)";
+          bgColor = "rgba(30,30,30,0.9)";
+        }
+
+        // Background circle
+        linksGroup
+          .append("circle")
+          .attr("cx", mx)
+          .attr("cy", my)
+          .attr("r", 12)
+          .attr("fill", bgColor)
+          .attr("stroke", iconColor)
+          .attr("stroke-width", 1.5)
+          .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.5))");
+
+        // Icon
+        linksGroup
+          .append("text")
+          .attr("x", mx)
+          .attr("y", my)
+          .attr("text-anchor", "middle")
+          .attr("dominant-baseline", "central")
+          .attr("font-size", 14)
+          .attr("fill", iconColor)
+          .style("pointer-events", "none")
+          .style("user-select", "none")
+          .text(icon);
+      }
+
       // Collect debug labels for later positioning at edges
       if (debugEnabled && entry.connections.length > 0) {
         // Determine which side of viewport based on edge midpoint
@@ -600,11 +657,22 @@
         });
 
       // Add tooltip
-      nodeG
-        .append("title")
-        .text(
-          `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`,
-        );
+      const p2pInfo = node.p2p_bind_info;
+      let tooltipText = `${friendlyName}\nID: ${nodeInfo.id.slice(-8)}\nMemory: ${formatBytes(ramUsed)}/${formatBytes(ramTotal)}`;
+
+      // Add P2P interface info if available
+      if (p2pInfo) {
+        if (p2pInfo.interface_type === "thunderbolt" && p2pInfo.interface_ip) {
+          tooltipText += `\nP2P: Thunderbolt (${p2pInfo.interface_ip})`;
+        } else if (p2pInfo.interface_ip) {
+          const typeLabel = p2pInfo.interface_type || "Network";
+          tooltipText += `\nP2P: ${typeLabel} (${p2pInfo.interface_ip})`;
+        } else {
+          tooltipText += `\nP2P: All Interfaces`;
+        }
+      }
+
+      nodeG.append("title").text(tooltipText);
 
       if (modelLower === "mac studio") {
         // Mac Studio - classic cube with memory fill
@@ -1142,6 +1210,39 @@
             .attr("font-size", tbFontSize)
             .attr("font-family", "SF Mono, Monaco, monospace")
             .text(tbText);
+        }
+
+        // Show P2P interface indicator
+        if (p2pInfo) {
+          const p2pY =
+            nodeInfo.y +
+            iconBaseHeight / 2 +
+            (showFullLabels ? 41 : showCompactLabels ? 34 : 30);
+          const p2pFontSize = showFullLabels ? 9 : 7;
+          let p2pText = "";
+          let p2pColor = "rgba(179,179,179,0.7)";
+
+          if (p2pInfo.interface_type === "thunderbolt") {
+            p2pText = "⚡P2P";
+            p2pColor = "rgba(234,179,8,0.9)";
+          } else if (p2pInfo.interface_ip) {
+            const typeShort = p2pInfo.interface_type === "wifi" ? "📶" : "🔌";
+            p2pText = `${typeShort}P2P`;
+            p2pColor = "rgba(100,150,200,0.8)";
+          } else {
+            p2pText = "🌐P2P";
+            p2pColor = "rgba(140,140,140,0.7)";
+          }
+
+          nodeG
+            .append("text")
+            .attr("x", nodeInfo.x)
+            .attr("y", p2pY)
+            .attr("text-anchor", "middle")
+            .attr("fill", p2pColor)
+            .attr("font-size", p2pFontSize)
+            .attr("font-family", "SF Mono, Monaco, monospace")
+            .text(p2pText);
         }
       }
     });

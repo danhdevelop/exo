@@ -49,6 +49,11 @@ export interface NodeInfo {
   };
   last_macmon_update: number;
   friendly_name?: string;
+  p2p_bind_info?: {
+    bind_address?: string;
+    interface_ip?: string;
+    interface_type?: "thunderbolt" | "wifi" | "ethernet" | "maybe_ethernet" | "unknown";
+  };
 }
 
 export interface TopologyEdge {
@@ -105,6 +110,12 @@ interface RawNetworkInterfaceInfo {
 
 interface RawNodeNetworkInfo {
   interfaces?: RawNetworkInterfaceInfo[];
+}
+
+interface RawNodeP2PBindInfo {
+  bindAddress?: string;
+  interfaceIp?: string;
+  interfaceType?: "thunderbolt" | "wifi" | "ethernet" | "maybe_ethernet" | "unknown";
 }
 
 interface RawSocketConnection {
@@ -195,6 +206,7 @@ interface RawStateResponse {
   nodeMemory?: Record<string, RawMemoryUsage>;
   nodeSystem?: Record<string, RawSystemPerformanceProfile>;
   nodeNetwork?: Record<string, RawNodeNetworkInfo>;
+  nodeP2pBind?: Record<string, RawNodeP2PBindInfo>;
   // Thunderbolt bridge status per node
   nodeThunderboltBridge?: Record<
     string,
@@ -283,6 +295,7 @@ interface GranularNodeState {
   nodeMemory?: Record<string, RawMemoryUsage>;
   nodeSystem?: Record<string, RawSystemPerformanceProfile>;
   nodeNetwork?: Record<string, RawNodeNetworkInfo>;
+  nodeP2pBind?: Record<string, RawNodeP2PBindInfo>;
 }
 
 function transformNetworkInterface(iface: RawNetworkInterfaceInfo): {
@@ -334,6 +347,7 @@ function transformTopology(
     const memory = granularState.nodeMemory?.[nodeId];
     const system = granularState.nodeSystem?.[nodeId];
     const network = granularState.nodeNetwork?.[nodeId];
+    const p2pBind = granularState.nodeP2pBind?.[nodeId];
 
     const ramTotal = memory?.ramTotal?.inBytes ?? 0;
     const ramAvailable = memory?.ramAvailable?.inBytes ?? 0;
@@ -372,6 +386,13 @@ function transformTopology(
       },
       last_macmon_update: Date.now() / 1000,
       friendly_name: identity?.friendlyName,
+      p2p_bind_info: p2pBind
+        ? {
+            bind_address: p2pBind.bindAddress,
+            interface_ip: p2pBind.interfaceIp,
+            interface_type: p2pBind.interfaceType,
+          }
+        : undefined,
     };
   }
 
@@ -1128,6 +1149,7 @@ class AppStore {
           nodeMemory: data.nodeMemory,
           nodeSystem: data.nodeSystem,
           nodeNetwork: data.nodeNetwork,
+          nodeP2pBind: data.nodeP2pBind,
         });
         // Handle topology changes for preview filter
         this.handleTopologyChange();

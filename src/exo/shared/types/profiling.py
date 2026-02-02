@@ -83,3 +83,11 @@ class ThunderboltBridgeStatus(CamelCaseModel):
     enabled: bool
     exists: bool
     service_name: str | None = None
+
+
+class NodeP2PBindInfo(CamelCaseModel):
+    """P2P network binding information for libp2p."""
+
+    bind_address: str | None = None  # The multiaddr libp2p is bound to
+    interface_ip: str | None = None  # Extracted IP (e.g., "192.168.2.10")
+    interface_type: InterfaceType | None = None  # "thunderbolt", "wifi", or "ethernet"

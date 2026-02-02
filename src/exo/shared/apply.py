@@ -14,6 +14,7 @@ from exo.shared.types.events import (
     InstanceDeleted,
     NodeDownloadProgress,
     NodeGatheredInfo,
+    NodeP2PBindUpdated,
     NodeTimedOut,
     RunnerDeleted,
     RunnerStatusUpdated,
@@ -68,6 +69,8 @@ def event_apply(event: Event, state: State) -> State:
             return apply_node_download_progress(event, state)
         case NodeGatheredInfo():
             return apply_node_gathered_info(event, state)
+        case NodeP2PBindUpdated():
+            return apply_node_p2p_bind_updated(event, state)
         case RunnerDeleted():
             return apply_runner_deleted(event, state)
         case RunnerStatusUpdated():
@@ -232,6 +235,9 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
         for key, value in state.node_thunderbolt_bridge.items()
         if key != event.node_id
     }
+    node_p2p_bind = {
+        key: value for key, value in state.node_p2p_bind.items() if key != event.node_id
+    }
     # Only recompute cycles if the leaving node had TB bridge enabled
     leaving_node_status = state.node_thunderbolt_bridge.get(event.node_id)
     leaving_node_had_tb_enabled = (
@@ -253,6 +259,7 @@ def apply_node_timed_out(event: NodeTimedOut, state: State) -> State:
             "node_network": node_network,
             "node_thunderbolt": node_thunderbolt,
             "node_thunderbolt_bridge": node_thunderbolt_bridge,
+            "node_p2p_bind": node_p2p_bind,
             "thunderbolt_bridge_cycles": thunderbolt_bridge_cycles,
         }
     )
@@ -362,3 +369,12 @@ def apply_topology_edge_deleted(event: TopologyEdgeDeleted, state: State) -> Sta
     topology.remove_connection(event.conn)
     # TODO: Clean up removing the reverse connection
     return state.model_copy(update={"topology": topology})
+
+
+def apply_node_p2p_bind_updated(event: NodeP2PBindUpdated, state: State) -> State:
+    """Update node's P2P bind information in state."""
+    return state.model_copy(
+        update={
+            "node_p2p_bind": state.node_p2p_bind | {event.node_id: event.p2p_bind_info}
+        }
+    )
