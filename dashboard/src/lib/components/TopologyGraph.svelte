@@ -405,11 +405,12 @@
       const sourceNode = nodes[sourceNodeId];
       const p2pInfo = sourceNode?.p2p_bind_info;
 
-      if (p2pInfo) {
-        let icon = "";
-        let iconColor = "rgba(179,179,179,0.9)";
-        let bgColor = "rgba(20,20,20,0.9)";
+      // Always show an indicator (default to "all interfaces" if no P2P info yet)
+      let icon = "🌐";
+      let iconColor = "rgba(120,120,120,0.8)";
+      let bgColor = "rgba(30,30,30,0.9)";
 
+      if (p2pInfo) {
         if (p2pInfo.interface_type === "thunderbolt") {
           icon = "⚡";
           iconColor = "rgba(255,215,0,1)";
@@ -426,36 +427,32 @@
           icon = "🌐";
           iconColor = "rgba(150,150,150,1)";
           bgColor = "rgba(40,40,40,0.95)";
-        } else {
-          icon = "🌐";
-          iconColor = "rgba(120,120,120,0.8)";
-          bgColor = "rgba(30,30,30,0.9)";
         }
-
-        // Background circle
-        linksGroup
-          .append("circle")
-          .attr("cx", mx)
-          .attr("cy", my)
-          .attr("r", 12)
-          .attr("fill", bgColor)
-          .attr("stroke", iconColor)
-          .attr("stroke-width", 1.5)
-          .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.5))");
-
-        // Icon
-        linksGroup
-          .append("text")
-          .attr("x", mx)
-          .attr("y", my)
-          .attr("text-anchor", "middle")
-          .attr("dominant-baseline", "central")
-          .attr("font-size", 14)
-          .attr("fill", iconColor)
-          .style("pointer-events", "none")
-          .style("user-select", "none")
-          .text(icon);
       }
+
+      // Background circle
+      linksGroup
+        .append("circle")
+        .attr("cx", mx)
+        .attr("cy", my)
+        .attr("r", 12)
+        .attr("fill", bgColor)
+        .attr("stroke", iconColor)
+        .attr("stroke-width", 1.5)
+        .style("filter", "drop-shadow(0 2px 4px rgba(0,0,0,0.5))");
+
+      // Icon
+      linksGroup
+        .append("text")
+        .attr("x", mx)
+        .attr("y", my)
+        .attr("text-anchor", "middle")
+        .attr("dominant-baseline", "central")
+        .attr("font-size", 14)
+        .attr("fill", iconColor)
+        .style("pointer-events", "none")
+        .style("user-select", "none")
+        .text(icon);
 
       // Collect debug labels for later positioning at edges
       if (debugEnabled && entry.connections.length > 0) {
