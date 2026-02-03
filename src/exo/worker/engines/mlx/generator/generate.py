@@ -72,7 +72,8 @@ def prefill(
         )
 
     # Dynamically detect quantization from model
-    kv_bits = get_model_quantization_bits(model, model_id)
+    # Note: RotatingKVCache doesn't support quantization, so disable it when using MAX_KV_SIZE
+    kv_bits = None if MAX_KV_SIZE is not None else get_model_quantization_bits(model, model_id)
 
     # Use max_tokens=1 because max_tokens=0 does not work.
     # We just throw away the generated token - we only care about filling the cache
@@ -258,7 +259,8 @@ def mlx_generate(
     model_id = task.model
 
     # Dynamically detect quantization from model
-    kv_bits = get_model_quantization_bits(model, model_id)
+    # Note: RotatingKVCache doesn't support quantization, so disable it when using MAX_KV_SIZE
+    kv_bits = None if MAX_KV_SIZE is not None else get_model_quantization_bits(model, model_id)
 
     # Prefill cache with all tokens except the last one
     prefill_tps, prefill_tokens = prefill(
