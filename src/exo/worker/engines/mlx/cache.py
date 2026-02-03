@@ -186,7 +186,9 @@ class KVPrefixCache:
             return prompt_cache, remaining_tokens, best_snapshot_index
 
         else:
-            prompt_cache = make_kv_cache(model, model_id=self._model_id)
+            # Import here to avoid circular dependency
+            from exo.worker.engines.mlx.constants import MAX_KV_SIZE, KEEP_KV_SIZE
+            prompt_cache = make_kv_cache(model, model_id=self._model_id, max_kv_size=MAX_KV_SIZE, keep=KEEP_KV_SIZE or 0)
             if len(self.prompts) == 0:
                 logger.info(f"KV cache empty, need to prefill {max_length} tokens")
             else:

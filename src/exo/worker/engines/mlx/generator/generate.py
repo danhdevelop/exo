@@ -29,7 +29,7 @@ from exo.worker.engines.mlx.cache import (
     get_model_quantization_bits,
     make_kv_cache,
 )
-from exo.worker.engines.mlx.constants import KV_BITS, KV_GROUP_SIZE, MAX_TOKENS
+from exo.worker.engines.mlx.constants import KV_GROUP_SIZE, MAX_KV_SIZE, MAX_TOKENS, KEEP_KV_SIZE
 from exo.worker.engines.mlx.utils_mlx import (
     apply_chat_template,
     mx_barrier,
@@ -121,8 +121,9 @@ def warmup_inference(
 
     tokens_generated = 0
 
-    # Use quantized KV cache (4-bit) for memory efficiency
-    cache = make_kv_cache(model=model)
+    # Use rotating KV cache with sliding window to reduce memory usage
+    # This keeps only the last MAX_KV_SIZE tokens in cache (default 8K)
+    cache = make_kv_cache(model=model, max_kv_size=MAX_KV_SIZE, keep=KEEP_KV_SIZE or 0)
 
     # Use a default sampler for warmup
     sampler = make_sampler(temp=0.7)
@@ -197,7 +198,8 @@ def mlx_generate(
     matched_index: int | None = None
     model_id = task.model
     if kv_prefix_cache is None:
-        caches = make_kv_cache(model=model, model_id=model_id)
+        # Use rotating KV cache with sliding window to limit memory usage
+        caches = make_kv_cache(model=model, model_id=model_id, max_kv_size=MAX_KV_SIZE, keep=KEEP_KV_SIZE or 0)
         prompt_tokens = encode_prompt(tokenizer, prompt)
     else:
         caches, prompt_tokens, matched_index = kv_prefix_cache.get_kv_cache(
