@@ -56,18 +56,23 @@ def get_model_quantization_bits(model: Model, model_id: str | None = None) -> in
     # Parse model ID/name for quantization hints
     if model_id:
         model_id_lower = model_id.lower()
-        if "4bit" in model_id_lower or "4-bit" in model_id_lower or "-4b" in model_id_lower:
+        # Check for various 4-bit patterns (4bit, 4-bit, -4b, q4)
+        if "4bit" in model_id_lower or "4-bit" in model_id_lower or "-4b" in model_id_lower or "q4" in model_id_lower or "-4bit" in model_id_lower:
             logger.info(f"Detected 4-bit quantization from model ID: {model_id}")
             return 4
-        elif "8bit" in model_id_lower or "8-bit" in model_id_lower or "-8b" in model_id_lower:
+        # Check for various 8-bit patterns (8bit, 8-bit, -8b, q8)
+        elif "8bit" in model_id_lower or "8-bit" in model_id_lower or "-8b" in model_id_lower or "q8" in model_id_lower or "-8bit" in model_id_lower:
             logger.info(f"Detected 8-bit quantization from model ID: {model_id}")
             return 8
-        elif "6bit" in model_id_lower or "6-bit" in model_id_lower or "-6b" in model_id_lower:
+        # Check for various 6-bit patterns (6bit, 6-bit, -6b, q6)
+        elif "6bit" in model_id_lower or "6-bit" in model_id_lower or "-6b" in model_id_lower or "q6" in model_id_lower or "-6bit" in model_id_lower:
             logger.info(f"Detected 6-bit quantization from model ID: {model_id}")
             return 6
-        elif "3bit" in model_id_lower or "3-bit" in model_id_lower or "-3b" in model_id_lower:
+        # Check for various 3-bit patterns (3bit, 3-bit, -3b, q3)
+        elif "3bit" in model_id_lower or "3-bit" in model_id_lower or "-3b" in model_id_lower or "q3" in model_id_lower or "-3bit" in model_id_lower:
             logger.info(f"Detected 3-bit quantization from model ID: {model_id}")
             return 3
+        # Check for FP16/BF16 patterns
         elif "fp16" in model_id_lower or "bf16" in model_id_lower or "float16" in model_id_lower:
             logger.info(f"Detected FP16/BF16 from model ID: {model_id} - using no quantization")
             return None

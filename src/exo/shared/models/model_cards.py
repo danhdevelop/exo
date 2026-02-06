@@ -132,6 +132,15 @@ MODEL_CARDS: dict[str, ModelCard] = {
         supports_tensor=True,
         tasks=[ModelTask.TextGeneration],
     ),
+    # kimi vl thinking
+    "kimi-vl-thinking-8bit": ModelCard(
+        model_id=ModelId("nightmedia/Kimi-VL-A3B-Thinking-2506-q8-hi-mlx"),
+        storage_size=Memory.from_gb(18),
+        n_layers=27,
+        hidden_size=2048,
+        supports_tensor=True,
+        tasks=[ModelTask.TextGeneration],
+    ),
     # kimi k2
     "kimi-k2-instruct-4bit": ModelCard(
         model_id=ModelId("mlx-community/Kimi-K2-Instruct-4bit"),

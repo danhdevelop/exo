@@ -164,6 +164,16 @@ def _inner_model(model: nn.Module) -> nn.Module:
     if isinstance(inner, nn.Module):
         return inner
 
+    # Handle vision-language models with language_model wrapper
+    language_model = getattr(model, "language_model", None)
+    if isinstance(language_model, nn.Module):
+        inner = getattr(language_model, "model", None)
+        if isinstance(inner, nn.Module):
+            return inner
+        inner = getattr(language_model, "transformer", None)
+        if isinstance(inner, nn.Module):
+            return inner
+
     raise ValueError("Model must either have a 'model' or 'transformer' attribute")
 
 
@@ -457,17 +467,17 @@ def _set_layers(model: nn.Module, layers: list[_LayerCallable]) -> None:
 
         # Update DeepSeek V3 specific parameters when layers are shrunk
         if isinstance(
-            model, (DeepseekV3Model, DeepseekV32Model, Glm4MoeModel, KimiK25Model)
+            inner_model_instance, (DeepseekV3Model, DeepseekV32Model, Glm4MoeModel, KimiK25Model)
         ) and hasattr(inner_model_instance, "num_layers"):
             logger.info(
-                f"Setting num_layers to {len(layers)} for model {model.model.__class__.__name__}"
+                f"Setting num_layers to {len(layers)} for model {inner_model_instance.__class__.__name__}"
             )
             inner_model_instance.start_idx = 0
             inner_model_instance.end_idx = len(layers)
             inner_model_instance.num_layers = len(layers)
-        elif isinstance(model, Qwen3MoeModel):
+        elif isinstance(inner_model_instance, Qwen3MoeModel):
             logger.info(
-                f"Setting num_hidden_layers to {len(layers)} for model {model.model.__class__.__name__}"
+                f"Setting num_hidden_layers to {len(layers)} for model {inner_model_instance.__class__.__name__}"
             )
             inner_model_instance.num_hidden_layers = len(layers)
     elif hasattr(inner_model_instance, "h"):

@@ -340,6 +340,39 @@ def load_tokenizer_for_model_id(
     model_id_lower = model_id.lower()
     eos_token_ids = get_eos_token_ids_for_model(model_id)
 
+    # Kimi VL uses a custom tokenizer that transformers 5.x can't properly pad
+    if "kimi-vl" in model_id_lower or "kimi_vl" in model_id_lower:
+        logger.info(f"Loading Kimi VL tokenizer for {model_id}")
+
+        # Load tokenizer normally with trust_remote_code
+        tokenizer = load_tokenizer(
+            model_path,
+            tokenizer_config_extra={"trust_remote_code": TRUST_REMOTE_CODE},
+            eos_token_ids=eos_token_ids,
+        )
+
+        # Patch encode to bypass transformers 5.x padding bug
+        # The tokenizer has an internal model (tiktoken) that we can use directly
+        if hasattr(tokenizer._tokenizer, "model"):  # pyright: ignore[reportUnknownMemberType]
+            original_encode = tokenizer._tokenizer.encode  # pyright: ignore[reportUnknownMemberType]
+
+            def _patched_encode(text: str, **kwargs: object) -> list[int]:
+                # Try to use the internal tiktoken model directly
+                if hasattr(tokenizer._tokenizer, "model") and hasattr(tokenizer._tokenizer.model, "encode"):  # pyright: ignore[reportUnknownMemberType]
+                    try:
+                        return list(tokenizer._tokenizer.model.encode(text, allowed_special="all"))  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                    except Exception:
+                        # Fallback to original encode
+                        pass
+                # Fallback to removing pad-related kwargs that cause issues
+                kwargs_copy = {k: v for k, v in kwargs.items() if k not in ["padding", "max_length", "truncation", "return_tensors"]}
+                kwargs_copy["add_special_tokens"] = kwargs.get("add_special_tokens", True)
+                return original_encode(text, **kwargs_copy)  # pyright: ignore[reportUnknownMemberType]
+
+            tokenizer._tokenizer.encode = _patched_encode  # pyright: ignore[reportUnknownMemberType]
+
+        return tokenizer
+
     # Kimi uses a custom TikTokenTokenizer that transformers 5.x can't load via AutoTokenizer
     if "kimi-k2" in model_id_lower:
         import importlib.util
