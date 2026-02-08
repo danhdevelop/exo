@@ -3,7 +3,7 @@ from collections.abc import Generator
 from typing import Annotated, Any, Literal
 
 from fastapi import UploadFile
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_core import PydanticUseDefault
 
 from exo.shared.models.model_cards import ModelCard, ModelId
@@ -68,15 +68,27 @@ class ToolCall(BaseModel):
 
 
 class ChatCompletionMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     role: Literal["system", "user", "assistant", "developer", "tool", "function"]
     content: (
         str | ChatCompletionMessageText | list[ChatCompletionMessageText] | None
     ) = None
-    thinking: str | None = None  # Added for GPT-OSS harmony format support
+    thinking: str | None = None
     name: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_call_id: str | None = None
     function_call: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_reasoning_field(cls, data: Any) -> Any:
+        """Map 'reasoning_content' to 'thinking' for DeepSeek/Qwen compatibility."""
+        if isinstance(data, dict):
+            rc = data.pop("reasoning_content", None)
+            if rc and not data.get("thinking"):
+                data["thinking"] = rc
+        return data
 
 
 class BenchChatCompletionMessage(ChatCompletionMessage):
