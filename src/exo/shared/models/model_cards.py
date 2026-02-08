@@ -249,6 +249,23 @@ MODEL_CARDS: dict[str, ModelCard] = {
         supports_tensor=True,
         tasks=[ModelTask.TextGeneration],
     ),
+    # qwen 2.5
+    "qwen-2.5-coder-14b-8bit": ModelCard(
+        model_id=ModelId("mlx-community/Qwen2.5-Coder-14B-Instruct-8bit"),
+        storage_size=Memory.from_gb(15.7),
+        n_layers=48,
+        hidden_size=5120,
+        supports_tensor=False,
+        tasks=[ModelTask.TextGeneration],
+    ),
+    "qwen-2.5-coder-32b-4bit": ModelCard(
+        model_id=ModelId("mlx-community/Qwen2.5-Coder-32B-Instruct-4bit"),
+        storage_size=Memory.from_gb(18.4),
+        n_layers=64,
+        hidden_size=5120,
+        supports_tensor=False,
+        tasks=[ModelTask.TextGeneration],
+    ),
     # qwen3
     "qwen3-0.6b": ModelCard(
         model_id=ModelId("mlx-community/Qwen3-0.6B-4bit"),
@@ -274,11 +291,11 @@ MODEL_CARDS: dict[str, ModelCard] = {
         supports_tensor=True,
         tasks=[ModelTask.TextGeneration],
     ),
-    "qwen3-coder-30b-6bit": ModelCard(
-        model_id=ModelId("lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-MLX-6bit"),
-        storage_size=Memory.from_gb(17.8),
-        n_layers=48,
-        hidden_size=2048,
+    "qwen3-code-reasoning-6b-8bit": ModelCard(
+        model_id=ModelId("nightmedia/Qwen3-Code-Reasoning-Instruct-6B-Brainstorm20x-q8-mlx"),
+        storage_size=Memory.from_gb(11.9),
+        n_layers=55,
+        hidden_size=2560,
         supports_tensor=True,
         tasks=[ModelTask.TextGeneration],
     ),
