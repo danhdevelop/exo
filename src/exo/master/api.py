@@ -21,10 +21,6 @@ from loguru import logger
 
 from exo.master.image_store import ImageStore
 from exo.master.placement import place_instance as get_instance_placements
-from exo.shared.adapters.integration import (
-    adapt_chat_completion_request,
-    enrich_chat_message_with_parsing,
-)
 from exo.shared.apply import apply
 from exo.shared.constants import (
     EXO_IMAGE_CACHE_DIR,
@@ -554,7 +550,7 @@ class API:
                 yield "data: [DONE]\n\n"
 
     async def _collect_chat_completion(
-        self, command_id: CommandId, model: str
+        self, command_id: CommandId
     ) -> ChatCompletionResponse:
         """Collect all token chunks for a chat completion and return a single response."""
 
@@ -596,16 +592,6 @@ class API:
         combined_text = "".join(text_parts)
         assert model_id is not None
 
-        # Parse complete output with model-specific adapter
-        message = ChatCompletionMessage(
-            role="assistant",
-            content=combined_text,
-            tool_calls=tool_calls,
-        )
-        message = enrich_chat_message_with_parsing(
-            message, ModelId(model_id), combined_text
-        )
-
         return ChatCompletionResponse(
             id=command_id,
             created=int(time.time()),
@@ -613,7 +599,11 @@ class API:
             choices=[
                 ChatCompletionChoice(
                     index=0,
-                    message=message,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=combined_text,
+                        tool_calls=tool_calls,
+                    ),
                     finish_reason=finish_reason,
                 )
             ],
@@ -661,16 +651,6 @@ class API:
         combined_text = "".join(text_parts)
         assert model is not None
 
-        # Parse complete output with model-specific adapter
-        message = ChatCompletionMessage(
-            role="assistant",
-            content=combined_text,
-            tool_calls=tool_calls,
-        )
-        message = enrich_chat_message_with_parsing(
-            message, model, combined_text
-        )
-
         resp = BenchChatCompletionResponse(
             id=command_id,
             created=int(time.time()),
@@ -678,7 +658,11 @@ class API:
             choices=[
                 ChatCompletionChoice(
                     index=0,
-                    message=message,
+                    message=ChatCompletionMessage(
+                        role="assistant",
+                        content=combined_text,
+                        tool_calls=tool_calls,
+                    ),
                     finish_reason=finish_reason,
                 )
             ],
@@ -707,9 +691,6 @@ class API:
                 status_code=404, detail=f"No instance found for model {payload.model}"
             )
 
-        # Adapt parameters for model-specific requirements
-        payload = adapt_chat_completion_request(payload)
-
         command = ChatCompletion(
             request_params=payload,
         )
@@ -720,7 +701,7 @@ class API:
                 media_type="text/event-stream",
             )
 
-        return await self._collect_chat_completion(command.command_id, payload.model)
+        return await self._collect_chat_completion(command.command_id)
 
     async def qwen_chat_completions(
         self, payload: ChatCompletionTaskParams
