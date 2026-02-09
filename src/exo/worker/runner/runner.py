@@ -261,8 +261,9 @@ def main(
                                 mlx_generator, tokenizer
                             )
 
-                        # Kimi-K2 has tool call sections - we don't care about them
-                        if "kimi" in shard_metadata.model_card.model_id.lower():
+                        # Kimi-K2 has tool call sections and K2-specific tool format
+                        # Only apply K2 patching for K2 models, NOT Kimi VL (vision-language)
+                        if "kimi" in shard_metadata.model_card.model_id.lower() and "k2" in shard_metadata.model_card.model_id.lower():
                             mlx_generator = filter_kimi_tokens(mlx_generator)
                             patch_kimi_tokenizer(tokenizer)
 
@@ -725,53 +726,120 @@ def parse_tool_calls(
     tool_call_end: str,
     tool_parser: Callable[[str], dict[str, Any] | list[dict[str, Any]]],
 ) -> Generator[GenerationResponse | ToolCallResponse]:
+    """Parse tool calls from a token stream.
+
+    Uses buffer-based string matching so tool_call_start / tool_call_end
+    do NOT need to be single tokens.  Handles multi-token start/end tags,
+    text before/after tool calls, and incomplete tool calls gracefully.
+    """
     in_tool_call = False
-    tool_call_text_parts: list[str] = []
+    tool_call_buf = ""       # text accumulated inside <tool_call>…</tool_call>
+    text_buf = ""            # text accumulated outside, checked for start marker
+    last_resp: GenerationResponse | None = None
+
+    def _make_text(text: str, ref: GenerationResponse) -> GenerationResponse:
+        """Clone *ref* with only the text changed (clear finish_reason)."""
+        return GenerationResponse(
+            text=text,
+            token=ref.token,
+            finish_reason=None,
+            stats=None,
+            tool_calls=None,
+            usage=ref.usage,
+        )
+
+    def _try_parse(raw: str, ref: GenerationResponse):
+        """Attempt to parse tool-call text; yield result or fallback."""
+        try:
+            parsed = tool_parser(raw.strip())
+            logger.info(f"parsed tool_call text into {parsed=}")
+            if isinstance(parsed, list):
+                tools = [_validate_single_tool(t) for t in parsed]
+            else:
+                tools = [_validate_single_tool(parsed)]
+            return ToolCallResponse(tool_calls=tools, usage=ref.usage)
+        except (
+            json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+            AttributeError,
+        ) as e:
+            logger.opt(exception=e).warning("tool call parsing failed")
+            return _make_text(tool_call_start + raw + tool_call_end, ref)
+
     for response in responses:
         assert isinstance(response, GenerationResponse)
-        # assumption: the tool call start is one token
-        if response.text == tool_call_start:
-            in_tool_call = True
-            continue
-        # assumption: the tool call end is one token
-        if in_tool_call and response.text == tool_call_end:
-            try:
-                # tool_parser returns an arbitrarily nested python dictionary
-                # we actually don't want the python dictionary, we just want to
-                # parse the top level { function: ..., arguments: ... } structure
-                # as we're just gonna hand it back to the api anyway
-                parsed = tool_parser("".join(tool_call_text_parts).strip())
-                logger.info(f"parsed {tool_call_text_parts=} into {parsed=}")
-                if isinstance(parsed, list):
-                    tools = [_validate_single_tool(tool) for tool in parsed]
-                else:
-                    tools = [_validate_single_tool(parsed)]
-                yield ToolCallResponse(tool_calls=tools, usage=response.usage)
+        last_resp = response
 
-            except (
-                json.JSONDecodeError,
-                ValidationError,
-                ValueError,
-                AttributeError,
-            ) as e:
-                # ValueError: our parsers raise this for malformed tool calls
-                # AttributeError: upstream parsers (e.g. glm47) may raise this when regex doesn't match
-                logger.opt(exception=e).warning("tool call parsing failed")
-                # assumption: talking about tool calls, not making a tool call
-                response.text = (
-                    tool_call_start + "".join(tool_call_text_parts) + tool_call_end
-                )
-                yield response
-
-            in_tool_call = False
-            tool_call_text_parts = []
-            continue
-
+        # ── inside a tool call: accumulate until end marker ──
         if in_tool_call:
-            tool_call_text_parts.append(response.text)
+            tool_call_buf += response.text
+
+            if tool_call_end in tool_call_buf:
+                end_idx = tool_call_buf.index(tool_call_end)
+                tool_text = tool_call_buf[:end_idx]
+                after_end = tool_call_buf[end_idx + len(tool_call_end):]
+
+                yield _try_parse(tool_text, response)
+
+                in_tool_call = False
+                tool_call_buf = ""
+
+                # feed leftover text back through the outer-loop logic
+                if after_end:
+                    text_buf += after_end
+                    # check immediately for another tool call
+                    if tool_call_start in text_buf:
+                        si = text_buf.index(tool_call_start)
+                        prefix = text_buf[:si]
+                        if prefix:
+                            yield _make_text(prefix, response)
+                        tool_call_buf = text_buf[si + len(tool_call_start):]
+                        text_buf = ""
+                        in_tool_call = True
             continue
-        # fallthrough
-        yield response
+
+        # ── outside a tool call ──
+        text_buf += response.text
+
+        # full start marker found
+        if tool_call_start in text_buf:
+            si = text_buf.index(tool_call_start)
+            prefix = text_buf[:si]
+            after_start = text_buf[si + len(tool_call_start):]
+
+            if prefix:
+                yield _make_text(prefix, response)
+
+            in_tool_call = True
+            tool_call_buf = after_start
+            text_buf = ""
+            continue
+
+        # check whether the tail of text_buf could be a *partial* start marker
+        partial_len = 0
+        for i in range(min(len(text_buf), len(tool_call_start)), 0, -1):
+            if text_buf.endswith(tool_call_start[:i]):
+                partial_len = i
+                break
+
+        if partial_len:
+            safe = text_buf[:-partial_len]
+            text_buf = text_buf[-partial_len:]
+            if safe:
+                yield _make_text(safe, response)
+        else:
+            # nothing pending – emit everything
+            yield _make_text(text_buf, response)
+            text_buf = ""
+
+    # ── flush whatever is left ──
+    if in_tool_call and tool_call_buf and last_resp is not None:
+        # incomplete tool call (output truncated) – emit as plain text
+        logger.warning("tool call incomplete (output truncated), emitting as text")
+        yield _make_text(tool_call_start + tool_call_buf, last_resp)
+    elif text_buf and last_resp is not None:
+        yield _make_text(text_buf, last_resp)
 
 
 def patch_kimi_tokenizer(tokenizer: TokenizerWrapper):
@@ -899,6 +967,139 @@ def patch_glm_tokenizer(tokenizer: TokenizerWrapper):
     tokenizer._tool_parser = parse_tool_call
 
 
+def _parse_parameters_state_machine(content: str) -> dict[str, str]:
+    """
+    Parse XML parameters using character-by-character state machine.
+
+    Handles both correct and broken formats:
+    - Correct: <parameter=name>value</parameter>
+    - Broken: <parameter=name=value</parameter> (AI puts value in attribute)
+
+    Works with any content including source code, special characters, and nested XML.
+
+    Args:
+        content: XML content containing parameter tags
+
+    Returns:
+        Dictionary mapping parameter names to values
+    """
+    arguments: dict[str, str] = {}
+    i = 0
+
+    while i < len(content):
+        # Look for <parameter= tag
+        if content[i:i+11] == '<parameter=':
+            i += 11  # Move past <parameter=
+
+            # Extract parameter name (until we hit >, =, or <)
+            param_name_chars = []
+            while i < len(content) and content[i] not in ['>', '=', '<']:
+                param_name_chars.append(content[i])
+                i += 1
+
+            param_name = ''.join(param_name_chars).strip()
+
+            if i >= len(content):
+                break
+
+            # Determine format by checking next character
+            if content[i] == '>':
+                # Correct format: <parameter=name>value</parameter>
+                i += 1  # Skip >
+
+                # Extract value until </parameter>
+                value_chars = []
+                depth = 0  # Track nesting for XML-like content in values
+                while i < len(content):
+                    if content[i:i+12] == '</parameter>':
+                        if depth == 0:
+                            break
+                        else:
+                            # This is part of the value content
+                            value_chars.append(content[i])
+                            i += 1
+                    elif content[i] == '<' and i+1 < len(content) and content[i+1] != '/':
+                        # Potential nested tag in value
+                        depth += 1
+                        value_chars.append(content[i])
+                        i += 1
+                    elif content[i:i+2] == '</':
+                        # Potential closing tag
+                        if depth > 0:
+                            depth -= 1
+                        value_chars.append(content[i])
+                        i += 1
+                    else:
+                        value_chars.append(content[i])
+                        i += 1
+
+                arguments[param_name] = ''.join(value_chars).strip()
+                i += 12  # Skip </parameter>
+
+            elif content[i] == '=':
+                # Broken format: <parameter=name=value</parameter>
+                i += 1  # Skip =
+
+                # Extract value until </parameter>
+                value_chars = []
+                while i < len(content):
+                    if content[i:i+12] == '</parameter>':
+                        break
+                    value_chars.append(content[i])
+                    i += 1
+
+                arguments[param_name] = ''.join(value_chars).strip()
+                i += 12  # Skip </parameter>
+
+            elif content[i:i+12] == '</parameter>':
+                # Malformed: <parameter=name</parameter> with no value
+                arguments[param_name] = ""
+                i += 12  # Skip </parameter>
+        else:
+            i += 1
+
+    return arguments
+
+
+def _parse_qwen_xml_tool_call(content: str, call_index: int) -> dict[str, Any] | None:
+    """
+    Parse Qwen3-Coder style pure XML tool calls.
+
+    Format:
+    <function=calculator>
+    <parameter=operation>multiply</parameter>
+    <parameter=a>5</parameter>
+    </function>
+
+    Returns OpenAI-compatible tool call dict or None if parsing fails.
+
+    Uses state machine parser to handle both correct and broken XML formats,
+    including arbitrary content (source code, HTML/JSX tags, special chars).
+    """
+    import re
+
+    # Extract function name from <function=name> tag
+    function_match = re.search(r"<function=([^>]+)>", content)
+    if not function_match:
+        return None
+
+    function_name = function_match.group(1).strip()
+
+    # Parse parameters using state machine parser
+    # This handles both correct and broken XML formats robustly
+    arguments = _parse_parameters_state_machine(content)
+
+    # Format as OpenAI-compatible tool call
+    return {
+        "id": f"call_{call_index}",
+        "type": "function",
+        "function": {
+            "name": function_name,
+            "arguments": json.dumps(arguments),
+        },
+    }
+
+
 def patch_qwen_tokenizer(tokenizer: TokenizerWrapper):
     """
     Patch Qwen tokenizer to use the qwen3_coder XML tool parser.
@@ -910,25 +1111,46 @@ def patch_qwen_tokenizer(tokenizer: TokenizerWrapper):
     </tool_call>
     """
     from mlx_lm.tool_parsers.qwen3_coder import (
-        parse_tool_call,
         tool_call_end,
         tool_call_start,
     )
 
+    def custom_qwen_parser(raw_text: str) -> dict[str, Any] | list[dict[str, Any]]:
+        """
+        Custom parser for Qwen XML tool calls that uses the working implementation.
+        This avoids the bug in mlx_lm.tool_parsers.qwen3_coder.parse_tool_call.
+        """
+        # The raw_text is the content between <tool_call> and </tool_call>
+        # Try parsing as pure XML (Qwen3-Coder format)
+        result = _parse_qwen_xml_tool_call(raw_text, call_index=0)
+        if result is None:
+            raise ValueError(f"Failed to parse Qwen tool call: {raw_text}")
+        return result
+
     tokenizer._tool_call_start = tool_call_start
     tokenizer._tool_call_end = tool_call_end
-    tokenizer._tool_parser = parse_tool_call
+    tokenizer._tool_parser = custom_qwen_parser
 
 
 def _validate_single_tool(obj: dict[str, Any]) -> ToolCallItem:
-    if (
-        ((name := obj.get("name")) is not None)
-        and ((args := obj.get("arguments")) is not None)
-        and isinstance(name, str)
-    ):
-        return ToolCallItem(name=name, arguments=json.dumps(args))
+    # Handle OpenAI format with nested 'function' object
+    if "function" in obj:
+        func = obj["function"]
+        name = func.get("name")
+        args = func.get("arguments")
     else:
-        raise ValidationError
+        # Handle flat format
+        name = obj.get("name")
+        args = obj.get("arguments")
+
+    if name is not None and args is not None and isinstance(name, str):
+        # If args is already a string (as in OpenAI format), use it directly
+        if isinstance(args, str):
+            return ToolCallItem(name=name, arguments=args)
+        else:
+            return ToolCallItem(name=name, arguments=json.dumps(args))
+    else:
+        raise ValueError(f"Invalid tool call structure: {obj}")
 
 
 def parse_qwen_thinking(
@@ -1049,46 +1271,6 @@ def parse_qwen_tool_calls(
             else:
                 yield response
 
-
-def _parse_qwen_xml_tool_call(content: str, call_index: int) -> dict[str, Any] | None:
-    """
-    Parse Qwen3-Coder style pure XML tool calls.
-
-    Format:
-    <function=calculator>
-    <parameter=operation>multiply</parameter>
-    <parameter=a>5</parameter>
-    </function>
-
-    Returns OpenAI-compatible tool call dict or None if parsing fails.
-    """
-    import regex as re
-
-    # Extract function name from <function=name> tag
-    function_match = re.search(r"<function=([^>]+)>", content)
-    if not function_match:
-        return None
-
-    function_name = function_match.group(1).strip()
-
-    # Extract all parameters
-    arguments: dict[str, str] = {}
-    parameter_pattern = re.compile(r"<parameter=([^>]+)>\s*([^<]*?)\s*</parameter>", re.DOTALL)
-
-    for match in parameter_pattern.finditer(content):
-        param_name = match.group(1).strip()
-        param_value = match.group(2).strip()
-        arguments[param_name] = param_value
-
-    # Format as OpenAI-compatible tool call
-    return {
-        "id": f"call_{call_index}",
-        "type": "function",
-        "function": {
-            "name": function_name,
-            "arguments": json.dumps(arguments),
-        },
-    }
 EXO_RUNNER_MUST_FAIL = "EXO RUNNER MUST FAIL"
 EXO_RUNNER_MUST_OOM = "EXO RUNNER MUST OOM"
 EXO_RUNNER_MUST_TIMEOUT = "EXO RUNNER MUST TIMEOUT"
